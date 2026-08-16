@@ -289,9 +289,13 @@ curl http://localhost:8080/-/status
 ```
 ok
 # uptime: 38s
-# prefix cache: 1 ASNs
-# org cache: 0 entries
+# prefix cache: 1/256 ASNs
+# org cache: 0/256 entries
 ```
+
+The cache lines are reported against capacity: a cache sitting at its limit
+means entries are being evicted, which is the signal that the cap is too low for
+the traffic this pod sees.
 
 Probes only need the status code; the `#` lines are detail for a human reading
 the endpoint directly. The response carries `Cache-Control: no-store` so no
@@ -349,6 +353,45 @@ vice versa — the reported source is always the one that actually answered.
 
 Note that concurrent first-time requests for the same uncached ASN may each
 trigger an upstream query; requests are not coalesced.
+
+### Eviction and bounds
+
+Three separate limits apply, and they do different jobs:
+
+| Limit | Value | Effect |
+| --- | --- | --- |
+| Freshness | 5 minutes | Past this an entry is re-queried upstream rather than served. |
+| Retention | 1 hour | Past this an entry is **deleted**. Only entries nobody has successfully refreshed get this old, so this reclaims ASNs queried once and never again. |
+| Capacity | 256 entries | Hard cap per cache. At capacity, the least recently refreshed entry is evicted to make room. |
+
+Pruning runs on every insert, and a reaper sweeps both caches once a minute so
+retention still holds when the service is idle and no insert is happening —
+otherwise a pod that went quiet would hold its last 256 entries indefinitely.
+
+Both caches are bounded. The org cache is keyed by `{asn, src}`, so a single ASN
+can occupy up to four of its slots.
+
+### Memory
+
+The caps exist to make memory a fixed ceiling rather than something that grows
+with the number of distinct ASNs ever queried. Measured:
+
+| Scenario | RSS |
+| --- | --- |
+| Idle | 8 MB |
+| 256 cached ASNs, 50 IPv6 prefixes each (typical) | ~9 MB |
+| 256 cached ASNs, 2000 prefixes each (far beyond any real ASN) | 51 MB |
+| 64 concurrent requests for a 2.3 MB upstream response | 29 MB |
+
+A single RADB response is separately capped at 8 MiB, so concurrency cannot
+spike without bound. That cap is enforced rather than truncating: the largest
+real responses measured are 1.12 MB (AS3356) and 2.43 MB (AS4134), and a
+response over the cap returns an error instead of a silently shortened prefix
+list.
+
+The supplied Kubernetes manifest sets `limits.memory: 96Mi` with
+`GOMEMLIMIT=80MiB`, so the Go GC works harder as it approaches the ceiling
+instead of the pod being OOM-killed.
 
 ## Responses
 

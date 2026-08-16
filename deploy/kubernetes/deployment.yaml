@@ -1,0 +1,175 @@
+---
+# asn-ipv6-ranges: Deployment + MetalLB LoadBalancer Service.
+#
+# Exposed on port 8080 end to end: the container listens on 8080 (the image
+# default) and the Service publishes 8080 on the MetalLB VIP. Nothing here
+# needs a privileged port, which matters because the image runs as UID 65532
+# and a non-root process cannot bind below 1024 without NET_BIND_SERVICE.
+#
+# Health probes hit /-/status, which answers from process state alone and never
+# queries RADB, a RIR, or WhoisFreaks. A third-party outage therefore cannot
+# fail the probe and get healthy pods restarted or depooled.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: asn-ipv6-ranges
+  labels:
+    app: asn-ipv6-ranges
+spec:
+  # Two replicas so a rolling update never leaves the MetalLB VIP without a
+  # backend. Drop to 1 if this is a scratch cluster and brief 502s are fine.
+  replicas: 2
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: asn-ipv6-ranges
+  template:
+    metadata:
+      labels:
+        app: asn-ipv6-ranges
+    spec:
+      # The service never calls the Kubernetes API.
+      automountServiceAccountToken: false
+      # main.go traps SIGTERM and gives in-flight requests up to 10s via
+      # srv.Shutdown; this leaves margin above that budget.
+      terminationGracePeriodSeconds: 20
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      # Spread across nodes so one node failing cannot take out both replicas.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: asn-ipv6-ranges
+      containers:
+        - name: asn-ipv6-ranges
+          # /-/status was added in commit b6e6f58. An older image 404s on the
+          # probe path and the pod will CrashLoopBackOff — pin at or after it.
+          image: registry.gitlab.fjd.io/frederick/asn-ipv6-ranges:20260816-b6e6f58
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: PORT
+              value: "8080"
+            # Soft ceiling kept below limits.memory: past it the Go GC works
+            # harder instead of the kernel OOM-killing the pod. Leaves ~16Mi of
+            # the limit as headroom for allocations the GC cannot defer.
+            - name: GOMEMLIMIT
+              value: "80MiB"
+            # Optional. Absent or empty, ?org=1 falls back to RIR WHOIS/RDAP
+            # and says so in a # comment. optional: true means the pod still
+            # starts when the Secret does not exist, so the key stays out of
+            # this file:
+            #   kubectl create secret generic asn-ipv6-ranges \
+            #     --from-literal=whoisfreaks-api-key=<KEY>
+            - name: WHOISFREAKS_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: asn-ipv6-ranges
+                  key: whoisfreaks-api-key
+                  optional: true
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          # Startup: a static Go binary listens almost immediately, so this only
+          # needs to cover a slow node. It gates the other two probes, so a cold
+          # start can never be misread as a liveness failure.
+          startupProbe:
+            httpGet:
+              path: /-/status
+              port: http
+            periodSeconds: 2
+            timeoutSeconds: 2
+            failureThreshold: 15
+          # Readiness: controls MetalLB VIP membership.
+          readinessProbe:
+            httpGet:
+              path: /-/status
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            successThreshold: 1
+            failureThreshold: 3
+          # Liveness: restarts the pod, so it is deliberately slower to trip.
+          # /-/status returns in well under a millisecond; only a wedged
+          # process or an exhausted listener misses three in a row.
+          livenessProbe:
+            httpGet:
+              path: /-/status
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 2
+            failureThreshold: 3
+          # lifecycle:
+          #   preStop:
+          #     # Keeps serving while kube-proxy and MetalLB withdraw the
+          #     # endpoint, so a rolling update drops no connections. Uses
+          #     # SleepAction because the scratch image has no shell to exec
+          #     # `sleep`. Requires Kubernetes 1.29+ (GA in 1.32).
+          #     sleep:
+          #       seconds: 5
+          resources:
+            requests:
+              cpu: 10m
+              # Typical steady state is ~15Mi: an 8Mi binary baseline plus a
+              # full 256-entry cache of ordinary ASNs (~0.5Mi at 50 prefixes
+              # each, ~1.6Mi at 200).
+              memory: 32Mi
+            limits:
+              # 96Mi covers the measured pathological case with ~1.9x headroom.
+              # Both caches are hard-capped at 256 entries and swept hourly, so
+              # the ceiling is bounded rather than growing with traffic:
+              #
+              #   256 entries x 2000 prefixes each  51Mi   (no real ASN is
+              #                                             anywhere near this)
+              #   64 concurrent large-ASN requests  29Mi
+              #   idle                               8Mi
+              #
+              # A single upstream response is separately capped at 8Mi by
+              # radb.maxBody, so concurrency cannot spike without bound.
+              memory: 96Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: asn-ipv6-ranges
+  labels:
+    app: asn-ipv6-ranges
+  annotations:
+    # Which MetalLB pool to allocate the VIP from.
+    metallb.io/address-pool: <YOUR_METALLB_ADDRESS_POOL>
+    # Optional: pin a specific address instead of taking the next free one.
+    # Replaces the removed spec.loadBalancerIP field (MetalLB 0.13+).
+    # metallb.io/loadBalancerIPs: 192.0.2.10
+spec:
+  type: LoadBalancer
+  selector:
+    app: asn-ipv6-ranges
+  # Cluster: any node can accept the VIP traffic and forward it, at the cost of
+  # SNAT — logs show a node IP, not the caller. Switch to Local to preserve the
+  # real client IP; under MetalLB L2 that also pins the VIP to a node actually
+  # running a pod, so keep replicas >= 2 before doing so.
+  externalTrafficPolicy: Cluster
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP

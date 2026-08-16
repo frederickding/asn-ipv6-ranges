@@ -42,7 +42,7 @@ func TestStatusHandler(t *testing.T) {
 	if !strings.Contains(body, "# uptime: 1m30s") {
 		t.Errorf("missing or wrong uptime in:\n%s", body)
 	}
-	for _, want := range []string{"# prefix cache: 0 ASNs", "# org cache: 0 entries"} {
+	for _, want := range []string{"# prefix cache: 0/256 ASNs", "# org cache: 0/256 entries"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("missing %q in:\n%s", want, body)
 		}
@@ -111,7 +111,7 @@ func TestStatusHandlerReportsCacheSizes(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	statusHandler(rec, httptest.NewRequest(http.MethodGet, statusPath, nil))
-	if !strings.Contains(rec.Body.String(), "# prefix cache: 2 ASNs") {
+	if !strings.Contains(rec.Body.String(), "# prefix cache: 2/256 ASNs") {
 		t.Errorf("expected 2 cached ASNs in:\n%s", rec.Body.String())
 	}
 }

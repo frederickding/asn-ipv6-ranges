@@ -47,6 +47,10 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Reclaims cached entries once they pass cacheMaxAge even while the service
+	// is idle and no insert is prompting a prune.
+	startCacheReaper(ctx)
+
 	go func() {
 		log.Printf("listening on %s", srv.Addr)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

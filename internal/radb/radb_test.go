@@ -56,6 +56,36 @@ func TestQuery(t *testing.T) {
 	}
 }
 
+// TestQueryRejectsOversizedResponse: an over-limit response must be an error,
+// never a silently shortened prefix list. Measured real responses run to
+// 2.43 MB (AS4134), so the limit has to be both generous and enforced.
+func TestQueryOversizedResponse(t *testing.T) {
+	t.Run("at the limit is accepted", func(t *testing.T) {
+		fakeWHOIS(t, strings.Repeat("x", maxBody))
+		body, err := Query("2906")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(body) != maxBody {
+			t.Errorf("got %d bytes, want %d", len(body), maxBody)
+		}
+	})
+
+	t.Run("one byte over is rejected", func(t *testing.T) {
+		fakeWHOIS(t, strings.Repeat("x", maxBody+1))
+		body, err := Query("2906")
+		if err == nil {
+			t.Fatalf("oversized response accepted, returning %d bytes", len(body))
+		}
+		if !strings.Contains(err.Error(), "exceeds") {
+			t.Errorf("unhelpful error: %v", err)
+		}
+		if body != "" {
+			t.Errorf("returned %d bytes alongside the error", len(body))
+		}
+	})
+}
+
 func TestQueryDialFailure(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

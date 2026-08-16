@@ -50,6 +50,9 @@ func statusHandler(w http.ResponseWriter, r *http.Request) {
 	// prefix output.
 	fmt.Fprintln(w, "ok")
 	fmt.Fprintf(w, "# uptime: %s\n", nowFunc().Sub(startTime).Round(time.Second))
-	fmt.Fprintf(w, "# prefix cache: %d ASNs\n", prefixEntries)
-	fmt.Fprintf(w, "# org cache: %d entries\n", orgEntries)
+	// Reported against capacity: a cache sitting at its limit means entries are
+	// being evicted, which is the signal that cacheMaxEntries is too low for
+	// the traffic this pod sees.
+	fmt.Fprintf(w, "# prefix cache: %d/%d ASNs\n", prefixEntries, cacheMaxEntries)
+	fmt.Fprintf(w, "# org cache: %d/%d entries\n", orgEntries, cacheMaxEntries)
 }

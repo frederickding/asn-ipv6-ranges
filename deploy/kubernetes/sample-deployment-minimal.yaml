@@ -1,0 +1,44 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: asn-ipv6-ranges
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: asn-ipv6-ranges
+  template:
+    metadata:
+      labels:
+        app: asn-ipv6-ranges
+    spec:
+      containers:
+        - name: asn-ipv6-ranges
+          image: registry.gitlab.fjd.io/frederick/asn-ipv6-ranges:20260816-9c1b901
+          env:
+            - name: PORT
+              value: "80"
+            - name: WHOISFREAKS_API_KEY
+              value: ""
+          ports:
+            - name: http
+              containerPort: 80
+              protocol: TCP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: asn-ipv6-ranges
+  annotations:
+    metallb.io/address-pool: <YOUR_METALLB_ADDRESS_POOL>
+spec:
+  type: LoadBalancer
+  selector:
+    app: asn-ipv6-ranges
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+      protocol: TCP
