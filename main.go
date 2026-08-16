@@ -33,6 +33,8 @@ func listenAddr() string {
 }
 
 func main() {
+	initAccessLog()
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/as/", asHandler)
 	// Exact path, no trailing slash: only /-/status matches.
@@ -40,7 +42,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              listenAddr(),
-		Handler:           mux,
+		Handler:           withAccessLog(mux),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -50,6 +52,7 @@ func main() {
 	// Reclaims cached entries once they pass cacheMaxAge even while the service
 	// is idle and no insert is prompting a prune.
 	startCacheReaper(ctx)
+	startStatsLogger(ctx)
 
 	go func() {
 		log.Printf("listening on %s", srv.Addr)
