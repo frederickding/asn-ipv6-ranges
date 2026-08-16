@@ -1,0 +1,43 @@
+% This is the RIPE Database query service.
+% The objects are in RPSL format.
+%
+% The RIPE Database is subject to Terms and Conditions.
+% See https://docs.db.ripe.net/terms-conditions.html
+
+% Note: this output has been filtered.
+%       To receive output for a database update, use the "-B" flag.
+
+% Information related to 'AS56444 - AS56807'
+
+as-block:       AS56444 - AS56807
+descr:          RIPE NCC ASN block
+remarks:        These AS Numbers are assigned to network operators in the RIPE NCC service region.
+mnt-by:         RIPE-NCC-HM-MNT
+created:        REDACTED
+last-modified:  2024-12-10T14:53:42Z
+source:         RIPE
+
+% Information related to 'AS56554'
+
+% Abuse contact for 'AS56554' is 'redacted@example.invalid'
+
+aut-num:        AS56554
+as-name:        IETF-MEETING
+descr:          IETF Meeting Network
+org:            ORG-IS136-RIPE
+import:         from AS-ANY accept ANY
+export:         to AS-ANY announce ANY
+admin-c:        REDACTED
+tech-c:         REDACTED
+status:         ASSIGNED
+mnt-by:         RIPE-NCC-END-MNT
+mnt-by:         IETF-MNT
+mnt-by:         netnod-mnt
+created:        REDACTED
+last-modified:  2019-03-26T08:50:53Z
+source:         RIPE # Filtered
+sponsoring-org: ORG-NIE1-RIPE
+
+% This query was served by the RIPE Database Query Service version 1.123 (SHETLAND)
+
+

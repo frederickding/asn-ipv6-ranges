@@ -40,21 +40,27 @@ func TestParseASN(t *testing.T) {
 	}
 }
 
+// isPermittedASN delegates to internal/asnreg, which owns the exhaustive table
+// tests; these cases pin the behavior the handler depends on, including the
+// 16-bit reserved ranges that are now rejected.
 func TestIsPermittedASN(t *testing.T) {
 	tests := []struct {
 		name string
 		asn  uint64
 		want bool
 	}{
-		{"zero", 0, true},
 		{"typical 16-bit", 2906, true},
-		{"16-bit max", 65535, true},
-		{"documentation reserved", 65540, false},
-		{"reserved block", 100000, false},
-		{"first APNIC block start", 131072, true},
-		{"first APNIC block end", 132095, true},
+		{"first assigned 16-bit", 1, true},
+		{"AS0 is reserved", 0, false},
+		{"AS_TRANS is reserved", 23456, false},
+		{"documentation range", 64500, false},
+		{"private use start", 64512, false},
+		{"private use end", 65534, false},
+		{"AS65535 is reserved", 65535, false},
+		{"reserved 32-bit block", 100000, false},
+		{"first APNIC 32-bit block", 131072, true},
 		{"unallocated after APNIC", 155962, false},
-		{"first RIPE block", 196608, true},
+		{"first RIPE 32-bit block", 196608, true},
 		{"reserved for private use", 4200000001, false},
 		{"final reserved value", 4294967295, false},
 	}
@@ -65,13 +71,5 @@ func TestIsPermittedASN(t *testing.T) {
 				t.Errorf("isPermittedASN(%d) = %v, want %v", tt.asn, got, tt.want)
 			}
 		})
-	}
-}
-
-func TestIsPermittedASNRangeBoundaries(t *testing.T) {
-	for _, r := range allocatedASNRanges {
-		if !isPermittedASN(uint64(r.start)) || !isPermittedASN(uint64(r.end)) {
-			t.Errorf("range %d-%d: boundaries should be permitted", r.start, r.end)
-		}
 	}
 }

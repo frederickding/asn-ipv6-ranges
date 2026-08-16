@@ -1,0 +1,51 @@
+% This is the AfriNIC Whois server.
+% The AFRINIC whois database is subject to  the following terms of Use. See https://afrinic.net/whois/terms
+
+% Note: this output has been filtered.
+%       To receive output for a database update, use the "-B" flag.
+
+% Information related to 'AS37100'
+
+% No abuse contact registered for AS37100
+
+aut-num:        AS37100
+as-name:        SEACOM-AS
+descr:          SEACOM Limited
+descr:          1st Floor, North Wing
+descr:          Orange Tower, Cybercity
+descr:          Ebene
+descr:          Mauritius
+descr:          +230 401 0915
+descr:          In case of abuse, please contact redacted@example.invalid
+status:         ASSIGNED
+admin-c:        REDACTED
+admin-c:        REDACTED
+tech-c:         REDACTED
+tech-c:         REDACTED
+org:            ORG-SL75-AFRINIC
+mnt-by:         AFRINIC-HM-MNT
+mnt-lower:      SEACOM-MNT
+mnt-routes:     SEACOM-MNT
+source:         AFRINIC # Filtered
+export:         to AS174 announce AS-SET-SEACOM
+export:         to AS1299 announce AS-SET-SEACOM
+export:         to AS2914 announce AS-SET-SEACOM
+export:         to AS3257 announce AS-SET-SEACOM
+export:         to AS3356 announce AS-SET-SEACOM
+export:         to AS6453 announce AS-SET-SEACOM
+export:         to AS6762 announce AS-SET-SEACOM
+export:         to AS6762 announce AS-SET-SEACOM
+export:         to AS6762 announce AS-SET-SEACOM
+export:         to AS-SET-SEACOM announce ANY
+export:         to AS6777 action community .= { 6777:6777, 6777:5713 }; announce AS37100
+import:         from AS174 action pref=100; accept ANY
+import:         from AS1299 action pref=100; accept ANY
+import:         from AS2914 action pref=100; accept ANY
+import:         from AS3257 action pref=100; accept ANY
+import:         from AS3356 action pref=100; accept ANY
+import:         from AS6453 action pref=100; accept ANY
+import:         from AS6762 action pref=100; accept ANY
+import:         from AS6777 accept ANY AND NOT <^[AS5713]>
+
+
+

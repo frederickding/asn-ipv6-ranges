@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"asn-ipv6-ranges/internal/asnreg"
 	"asn-ipv6-ranges/internal/whoisfreaks"
 )
 
@@ -158,18 +159,22 @@ func TestASHandlerAggParamInvalid(t *testing.T) {
 	}
 }
 
+// arinASN is 2906, which the generated table maps to ARIN — used so the RIR
+// path has a real registry to resolve.
+const arinASN = "2906"
+
 func TestASHandlerOrgParam(t *testing.T) {
 	t.Run("not requested by default", func(t *testing.T) {
 		clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 		swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })
 		getenv = func(string) string { return "secret-key" }
-		orgLookup = func(string, string) (string, error) {
+		orgAPILookup = func(string, string) (string, error) {
 			t.Error("org lookup ran without ?org=1")
 			return "", nil
 		}
 
 		rec := httptest.NewRecorder()
-		asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/2906", nil))
+		asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/"+arinASN, nil))
 
 		for _, c := range bodyComments(rec.Body.String()) {
 			if strings.HasPrefix(c, "# org:") {
@@ -178,7 +183,7 @@ func TestASHandlerOrgParam(t *testing.T) {
 		}
 	})
 
-	t.Run("requested with key configured", func(t *testing.T) {
+	t.Run("API preferred when a key is set", func(t *testing.T) {
 		clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 		swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })
 		getenv = func(name string) string {
@@ -188,67 +193,148 @@ func TestASHandlerOrgParam(t *testing.T) {
 			return "secret-key"
 		}
 		gotKey := ""
-		orgLookup = func(asn, key string) (string, error) {
+		orgAPILookup = func(asn, key string) (string, error) {
 			gotKey = key
+			return "Netflix Streaming Services Inc.", nil
+		}
+		orgRIRLookup = func(asnreg.Registry, string) (string, error) {
+			t.Error("RIR queried even though the API succeeded")
+			return "", nil
+		}
+
+		rec := httptest.NewRecorder()
+		asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/"+arinASN+"?org=1", nil))
+
+		if gotKey != "secret-key" {
+			t.Errorf("lookup got key %q", gotKey)
+		}
+		want := "# org: Netflix Streaming Services Inc. (source: " + whoisfreaks.Host + ")"
+		if !hasComment(rec.Body.String(), want) {
+			t.Errorf("missing API-sourced org comment in:\n%s", rec.Body.String())
+		}
+	})
+
+	// The behavior change this feature exists for: org now resolves with no
+	// API key at all, via the authoritative registry.
+	t.Run("RIR used when no key is configured", func(t *testing.T) {
+		clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+		swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })
+		getenv = func(string) string { return "" }
+		var gotReg asnreg.Registry
+		orgRIRLookup = func(reg asnreg.Registry, asn string) (string, error) {
+			gotReg = reg
 			return "Netflix Streaming Services Inc.", nil
 		}
 
 		rec := httptest.NewRecorder()
-		asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/2906?org=1", nil))
+		asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/"+arinASN+"?org=1", nil))
 
 		if rec.Code != http.StatusOK {
 			t.Fatalf("got status %d", rec.Code)
 		}
-		if gotKey != "secret-key" {
-			t.Errorf("lookup got key %q", gotKey)
+		if gotReg.Name != "ARIN" || gotReg.WHOISHost != "whois.arin.net" {
+			t.Errorf("resolved against %+v, want ARIN", gotReg)
 		}
-		if !hasComment(rec.Body.String(), "# org: Netflix Streaming Services Inc.") {
-			t.Errorf("missing org comment in:\n%s", rec.Body.String())
+		if !hasComment(rec.Body.String(), "# org: Netflix Streaming Services Inc. (source: whois.arin.net)") {
+			t.Errorf("missing RIR-sourced org comment in:\n%s", rec.Body.String())
 		}
 	})
 
-	// The documented behavior: with no key configured, org has zero effect but
-	// the response says so.
-	t.Run("requested with no key configured", func(t *testing.T) {
+	t.Run("RIR fallback when the API fails", func(t *testing.T) {
 		clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 		swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })
-		getenv = func(string) string { return "" }
+		getenv = func(string) string { return "bad-key" }
+		orgAPILookup = func(string, string) (string, error) {
+			return "", errors.New("api returned 401: Provided API key is invalid.")
+		}
+		orgRIRLookup = func(asnreg.Registry, string) (string, error) {
+			return "Netflix Streaming Services Inc.", nil
+		}
 
 		rec := httptest.NewRecorder()
-		asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/2906?org=true", nil))
+		asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/"+arinASN+"?org=1", nil))
 
-		if rec.Code != http.StatusOK {
-			t.Fatalf("got status %d", rec.Code)
-		}
-		want := "# org: not looked up (WHOISFREAKS_API_KEY is not set, org parameter has no effect)"
-		if !hasComment(rec.Body.String(), want) {
-			t.Errorf("missing no-key notice in:\n%s", rec.Body.String())
-		}
-		// Prefixes must still be served normally.
-		if !hasComment(rec.Body.String(), "# count: 2") {
-			t.Errorf("prefix output changed when org had no effect:\n%s", rec.Body.String())
+		if !hasComment(rec.Body.String(), "# org: Netflix Streaming Services Inc. (source: whois.arin.net)") {
+			t.Errorf("expected fallback to the RIR, got:\n%s", rec.Body.String())
 		}
 	})
 
-	t.Run("lookup failure degrades gracefully", func(t *testing.T) {
+	t.Run("rir=1 bypasses the API even with a key", func(t *testing.T) {
 		clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 		swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })
 		getenv = func(string) string { return "secret-key" }
-		orgLookup = func(string, string) (string, error) {
-			return "", errors.New("api returned 401: Provided API key is invalid.")
+		orgAPILookup = func(string, string) (string, error) {
+			t.Error("API called despite rir=1")
+			return "", nil
+		}
+		orgRIRLookup = func(asnreg.Registry, string) (string, error) {
+			return "Netflix Streaming Services Inc.", nil
 		}
 
 		rec := httptest.NewRecorder()
-		asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/2906?org=1", nil))
+		asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/"+arinASN+"?org=1&rir=1", nil))
+
+		if !hasComment(rec.Body.String(), "# org: Netflix Streaming Services Inc. (source: whois.arin.net)") {
+			t.Errorf("expected the RIR source, got:\n%s", rec.Body.String())
+		}
+	})
+
+	// Forcing means forcing: a failed forced lookup must not quietly fall back
+	// to the API, or the parameter could not be trusted to test the RIR path.
+	t.Run("rir=1 does not fall back to the API on failure", func(t *testing.T) {
+		clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+		swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })
+		getenv = func(string) string { return "secret-key" }
+		orgAPILookup = func(string, string) (string, error) {
+			t.Error("API used as a fallback despite rir=1")
+			return "Should Not Appear", nil
+		}
+		orgRIRLookup = func(asnreg.Registry, string) (string, error) {
+			return "", errors.New("dial tcp: timeout")
+		}
+
+		rec := httptest.NewRecorder()
+		asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/"+arinASN+"?org=1&rir=1", nil))
 
 		if rec.Code != http.StatusOK {
 			t.Errorf("org failure must not fail the request, got %d", rec.Code)
 		}
+		if strings.Contains(rec.Body.String(), "Should Not Appear") {
+			t.Error("fell back to the API despite rir=1")
+		}
 		if !hasComment(rec.Body.String(), "# count: 2") {
 			t.Errorf("prefixes missing after org failure:\n%s", rec.Body.String())
 		}
-		if !hasComment(rec.Body.String(), "# org: lookup failed: api returned 401: Provided API key is invalid.") {
+	})
+
+	t.Run("both sources failing degrades gracefully", func(t *testing.T) {
+		clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+		swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })
+		getenv = func(string) string { return "bad-key" }
+		orgAPILookup = func(string, string) (string, error) {
+			return "", errors.New("api returned 401")
+		}
+		orgRIRLookup = func(asnreg.Registry, string) (string, error) {
+			return "", errors.New("dial tcp: timeout")
+		}
+
+		rec := httptest.NewRecorder()
+		asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/"+arinASN+"?org=1", nil))
+
+		if rec.Code != http.StatusOK {
+			t.Errorf("org failure must not fail the request, got %d", rec.Code)
+		}
+		var sawFailure bool
+		for _, c := range bodyComments(rec.Body.String()) {
+			if strings.HasPrefix(c, "# org: lookup failed:") {
+				sawFailure = true
+			}
+		}
+		if !sawFailure {
 			t.Errorf("missing failure comment:\n%s", rec.Body.String())
+		}
+		if !hasComment(rec.Body.String(), "# count: 2") {
+			t.Errorf("prefixes missing after org failure:\n%s", rec.Body.String())
 		}
 	})
 
@@ -257,58 +343,92 @@ func TestASHandlerOrgParam(t *testing.T) {
 	t.Run("multiline org name cannot inject output lines", func(t *testing.T) {
 		clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 		swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })
-		getenv = func(string) string { return "secret-key" }
-		orgLookup = func(string, string) (string, error) {
+		getenv = func(string) string { return "" }
+		orgRIRLookup = func(asnreg.Registry, string) (string, error) {
 			return "Evil Corp\n2001:dead::/32", nil
 		}
 
 		rec := httptest.NewRecorder()
-		asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/2906?org=1", nil))
+		asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/"+arinASN+"?org=1", nil))
 
 		for _, line := range strings.Split(strings.TrimSpace(rec.Body.String()), "\n") {
 			if line == "2001:dead::/32" {
 				t.Fatalf("injected prefix line in output:\n%s", rec.Body.String())
 			}
 		}
-		if !hasComment(rec.Body.String(), "# org: Evil Corp 2001:dead::/32") {
-			t.Errorf("unexpected flattening:\n%s", rec.Body.String())
-		}
 	})
 
-	t.Run("org result is cached", func(t *testing.T) {
+	t.Run("results are cached per source", func(t *testing.T) {
 		clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 		swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })
 		getenv = func(string) string { return "secret-key" }
-		calls := 0
-		orgLookup = func(string, string) (string, error) {
-			calls++
-			return "Example Org", nil
+		apiCalls, rirCalls := 0, 0
+		orgAPILookup = func(string, string) (string, error) {
+			apiCalls++
+			return "From API", nil
+		}
+		orgRIRLookup = func(asnreg.Registry, string) (string, error) {
+			rirCalls++
+			return "From RIR", nil
+		}
+
+		get := func(query string) string {
+			rec := httptest.NewRecorder()
+			asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/"+arinASN+query, nil))
+			return rec.Body.String()
 		}
 
 		for i := 0; i < 3; i++ {
-			rec := httptest.NewRecorder()
-			asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/2906?org=1", nil))
+			get("?org=1")
 		}
-		if calls != 1 {
-			t.Errorf("metered API called %d times, want 1", calls)
+		if apiCalls != 1 {
+			t.Errorf("metered API called %d times, want 1", apiCalls)
+		}
+
+		// A forced request must not be served the cached API answer.
+		if body := get("?org=1&rir=1"); !hasComment(body, "# org: From RIR (source: whois.arin.net)") {
+			t.Errorf("forced request replayed the cached API answer:\n%s", body)
+		}
+		if rirCalls != 1 {
+			t.Errorf("RIR called %d times, want 1", rirCalls)
+		}
+		// ...and the default request must still report the API answer.
+		if body := get("?org=1"); !hasComment(body, "# org: From API (source: "+whoisfreaks.Host+")") {
+			t.Errorf("default request served the forced answer:\n%s", body)
 		}
 
 		clock = clock.Add(cacheTTL + time.Second)
-		rec := httptest.NewRecorder()
-		asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/2906?org=1", nil))
-		if calls != 2 {
-			t.Errorf("expected refresh after TTL, got %d calls", calls)
+		get("?org=1")
+		if apiCalls != 2 {
+			t.Errorf("expected refresh after TTL, got %d API calls", apiCalls)
 		}
 	})
 
-	t.Run("invalid org value", func(t *testing.T) {
+	t.Run("rir without org is reported as ignored", func(t *testing.T) {
 		clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 		swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })
 
 		rec := httptest.NewRecorder()
-		asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/2906?org=yes", nil))
-		if rec.Code != http.StatusBadRequest {
-			t.Errorf("got status %d, want 400", rec.Code)
+		asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/"+arinASN+"?rir=1", nil))
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("got status %d", rec.Code)
+		}
+		if !hasComment(rec.Body.String(), "# rir: ignored (org lookup not requested)") {
+			t.Errorf("missing ignored notice in:\n%s", rec.Body.String())
+		}
+	})
+
+	t.Run("invalid values", func(t *testing.T) {
+		clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+		swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })
+
+		for _, q := range []string{"?org=yes", "?org=1&rir=maybe", "?rir=2"} {
+			rec := httptest.NewRecorder()
+			asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/"+arinASN+q, nil))
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("%s: got status %d, want 400", q, rec.Code)
+			}
 		}
 	})
 }

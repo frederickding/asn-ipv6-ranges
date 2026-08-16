@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"asn-ipv6-ranges/internal/asnreg"
 )
 
 const sampleWhois = `route:          23.246.0.0/18
@@ -53,17 +55,24 @@ func aggregateStrings(input string) []string {
 	return prefixStrings(aggregatePrefixes(extractIPv6Prefixes(input)))
 }
 
-// swapTestHooks isolates cache/clock/upstream state for a single test. The org
-// lookup and env reader default to failing loudly, so any test that reaches
-// them without opting in is caught rather than hitting the live paid API.
+// swapTestHooks isolates cache/clock/upstream state for a single test. Both org
+// sources and the env reader default to failing loudly, so any test that
+// reaches them without opting in is caught rather than hitting the live paid
+// API or a real RIR whois server.
 func swapTestHooks(t *testing.T, clock *time.Time, query func(string) (string, error)) {
 	t.Helper()
-	origQuery, origOrg, origNow, origGetenv := whoisQuery, orgLookup, nowFunc, getenv
+	origQuery, origAPI, origRIR := whoisQuery, orgAPILookup, orgRIRLookup
+	origNow, origGetenv := nowFunc, getenv
+
 	whoisQuery = query
 	nowFunc = func() time.Time { return *clock }
-	orgLookup = func(string, string) (string, error) {
-		t.Error("org API called without an explicit test hook")
-		return "", errors.New("unexpected org lookup")
+	orgAPILookup = func(string, string) (string, error) {
+		t.Error("WhoisFreaks API called without an explicit test hook")
+		return "", errors.New("unexpected API lookup")
+	}
+	orgRIRLookup = func(asnreg.Registry, string) (string, error) {
+		t.Error("RIR whois called without an explicit test hook")
+		return "", errors.New("unexpected RIR lookup")
 	}
 	getenv = func(string) string { return "" }
 
@@ -72,13 +81,14 @@ func swapTestHooks(t *testing.T, clock *time.Time, query func(string) (string, e
 		cache = make(map[string]cacheEntry)
 		cacheMu.Unlock()
 		orgCacheMu.Lock()
-		orgCache = make(map[string]orgCacheEntry)
+		orgCache = make(map[orgCacheKey]orgCacheEntry)
 		orgCacheMu.Unlock()
 	}
 	resetCaches()
 
 	t.Cleanup(func() {
-		whoisQuery, orgLookup, nowFunc, getenv = origQuery, origOrg, origNow, origGetenv
+		whoisQuery, orgAPILookup, orgRIRLookup = origQuery, origAPI, origRIR
+		nowFunc, getenv = origNow, origGetenv
 		resetCaches()
 	})
 }

@@ -1,0 +1,67 @@
+% IP Client: 100.35.212.241
+ 
+% Joint Whois - whois.lacnic.net
+%  This server accepts single ASN, IPv4 or IPv6 queries
+
+% LACNIC resource: whois.lacnic.net
+
+
+% Copyright LACNIC lacnic.net
+%  The data below is provided for information purposes
+%  and to assist persons in obtaining information about or
+%  related to AS and IP numbers registrations
+%  By submitting a whois query, you agree to use this data
+%  only for lawful purposes.
+%  2026-08-16 19:36:49 (Z Z)
+
+aut-num:     AS27947
+owner:       Telconet S.A
+ownerid:     EC-TESA-LACNIC
+responsible: REDACTED
+address:     REDACTED
+address:     REDACTED
+country:     EC
+phone:       REDACTED
+owner-c:     REDACTED
+routing-c:   SEL
+abuse-c:     PAS130
+created:     REDACTED
+changed:     REDACTED
+inetnum:     192.207.244.0/24
+inetnum:     192.188.49.0/24
+inetnum:     192.188.47.0/24
+
+nic-hdl:     REDACTED
+person:      REDACTED
+e-mail:      REDACTED
+address:     REDACTED
+address:      REDACTED
+country:     EC
+phone:       REDACTED
+created:     REDACTED
+changed:     REDACTED
+
+nic-hdl:     REDACTED
+person:      REDACTED
+e-mail:      REDACTED
+address:     REDACTED
+address:     REDACTED
+country:     EC
+phone:       REDACTED
+created:     REDACTED
+changed:     REDACTED
+
+nic-hdl:     REDACTED
+person:      REDACTED
+e-mail:      REDACTED
+address:     REDACTED
+address:     REDACTED
+country:     EC
+phone:       REDACTED
+created:     REDACTED
+changed:     REDACTED
+
+% whois.lacnic.net accepts only direct match queries.
+% Types of queries are: POCs, ownerid, CIDR blocks, IP
+% and AS numbers.
+

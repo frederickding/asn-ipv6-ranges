@@ -21,6 +21,9 @@ import (
 // callers should skip the lookup entirely.
 const KeyEnv = "WHOISFREAKS_API_KEY"
 
+// Host identifies this source in service output.
+const Host = "api.whoisfreaks.com"
+
 const (
 	timeout = 10 * time.Second
 	// maxBody bounds the read: this is third-party input.

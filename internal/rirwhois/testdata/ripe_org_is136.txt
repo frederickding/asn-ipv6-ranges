@@ -1,0 +1,27 @@
+% This is the RIPE Database query service.
+% The objects are in RPSL format.
+%
+% The RIPE Database is subject to Terms and Conditions.
+% See https://docs.db.ripe.net/terms-conditions.html
+
+% Note: this output has been filtered.
+%       To receive output for a database update, use the "-B" flag.
+
+% Information related to 'ORG-IS136-RIPE'
+
+organisation:   ORG-IS136-RIPE
+org-name:       Internet Society
+country:        CH
+reg-nr:         CHE-100.233.697
+org-type:       OTHER
+address:        REDACTED
+abuse-c:        AR28097-RIPE
+mnt-ref:        netnod-mnt
+mnt-by:         ietf-mnt
+created:        REDACTED
+last-modified:  2026-05-13T05:47:07Z
+source:         RIPE # Filtered
+
+% This query was served by the RIPE Database Query Service version 1.123 (DEXTER)
+
+

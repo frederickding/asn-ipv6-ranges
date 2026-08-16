@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"asn-ipv6-ranges/internal/radb"
-	"asn-ipv6-ranges/internal/whoisfreaks"
 )
 
 func writeError(w http.ResponseWriter, status int, format string, args ...any) {
@@ -71,6 +70,11 @@ func asHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "%v", err)
 		return
 	}
+	forceRIR, err := parseBoolParam(r, "rir", false)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "%v", err)
+		return
+	}
 
 	prefixes, queriedAt, err := getPrefixes(asn)
 	if err != nil {
@@ -83,18 +87,16 @@ func asHandler(w http.ResponseWriter, r *http.Request) {
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "# IPv6 prefixes for AS%s (source: %s)\n", asn, radb.Host)
-	if wantOrg {
-		switch apiKey := getenv(whoisfreaks.KeyEnv); {
-		case apiKey == "":
-			fmt.Fprintf(&b, "# org: not looked up (%s is not set, org parameter has no effect)\n", whoisfreaks.KeyEnv)
-		default:
-			// An org lookup failure must not sink the prefix list.
-			if name, err := getOrgName(asn, apiKey); err != nil {
-				fmt.Fprintf(&b, "# org: lookup failed: %s\n", singleLine(err.Error()))
-			} else {
-				fmt.Fprintf(&b, "# org: %s\n", singleLine(name))
-			}
+	switch {
+	case wantOrg:
+		// An org lookup failure must not sink the prefix list.
+		if res, err := getOrgName(asn, v, forceRIR); err != nil {
+			fmt.Fprintf(&b, "# org: lookup failed: %s\n", singleLine(err.Error()))
+		} else {
+			fmt.Fprintf(&b, "# org: %s (source: %s)\n", singleLine(res.name), res.source)
 		}
+	case forceRIR:
+		b.WriteString("# rir: ignored (org lookup not requested)\n")
 	}
 	if aggregate {
 		b.WriteString("# aggregate: on (more-specifics covered by a broader prefix removed)\n")

@@ -45,7 +45,7 @@ lookup runs — so a saved file records when its data was really fetched.
 
 ## Parameters
 
-Both parameters accept `1`/`0` and `true`/`false` (case-insensitive; `t`/`f`
+All parameters accept `1`/`0` and `true`/`false` (case-insensitive; `t`/`f`
 also work). An empty value (`?agg=`) falls back to the default. Any other value
 returns `400`.
 
@@ -53,6 +53,7 @@ returns `400`.
 | --- | --- | --- |
 | `agg` | `1` (on) | Remove prefixes already covered by a broader prefix in the list. |
 | `org` | `0` (off) | Look up the ASN's organization name and report it in a comment. |
+| `rir` | `0` (off) | Force the org lookup to use the authoritative RIR, bypassing the WhoisFreaks API. |
 
 ### `agg` — prefix aggregation
 
@@ -77,9 +78,8 @@ covering prefix precedes anything beneath it.
 
 ### `org` — organization name lookup
 
-`org=1` performs an additional lookup against the
-[WhoisFreaks ASN WHOIS API](https://whoisfreaks.com/documentation/asn-whois-api)
-and adds an `# org:` comment:
+`org=1` performs an additional lookup for the ASN's organization name and adds
+an `# org:` comment naming the source that answered:
 
 ```bash
 curl 'http://localhost:8080/as/2906?org=1'
@@ -87,39 +87,77 @@ curl 'http://localhost:8080/as/2906?org=1'
 
 ```
 # IPv6 prefixes for AS2906 (source: whois.radb.net)
-# org: Netflix Streaming Services Inc.
+# org: Netflix Streaming Services Inc. (source: whois.arin.net)
 ...
 ```
 
-This lookup requires an API key in the `WHOISFREAKS_API_KEY` environment
-variable. **If that variable is not set, `org` has no effect**, and the response
-says so rather than failing:
+There are two sources, and **no configuration is required** — the authoritative
+RIR is always available:
 
-```
-# org: not looked up (WHOISFREAKS_API_KEY is not set, org parameter has no effect)
-```
+| Source | Requires | Notes |
+| --- | --- | --- |
+| The ASN's RIR whois server | nothing | Chosen from the IANA-derived table, e.g. `whois.arin.net` for AS2906 |
+| [WhoisFreaks ASN WHOIS API](https://whoisfreaks.com/documentation/asn-whois-api) | `WHOISFREAKS_API_KEY` | Normalized single-field answer |
+
+By default the API is tried first **when a key is set**, falling back to the RIR
+if it fails; with no key, the RIR is used directly. Use [`rir`](#rir--force-the-authoritative-rir)
+to force the registry path. The `(source: …)` annotation always reports which
+one actually answered.
 
 The lookup is never performed unless `org` is explicitly enabled, so the service
-makes no third-party API calls by default.
+contacts neither source by default.
 
 A failed lookup does not fail the request — the prefix list is the primary
 output, so the response is still `200` with the reason in a comment:
 
 ```
-# org: lookup failed: api returned 401: Provided API key is invalid.
+# org: lookup failed: whois.arin.net: dial tcp: i/o timeout
 ```
 
 The API key is stripped from any error text before it reaches the response, and
-API-supplied names are flattened to a single line so they cannot escape their
-comment and forge a prefix entry.
+names from either source are flattened to a single line so they cannot escape
+their comment and forge a prefix entry.
+
+### `rir` — force the authoritative RIR
+
+`rir=1` skips the WhoisFreaks API entirely, even when a key is configured, and
+resolves the name from the registry that administers the ASN:
+
+```bash
+curl 'http://localhost:8080/as/2906?org=1&rir=1'
+```
+
+```
+# org: Netflix Streaming Services Inc. (source: whois.arin.net)
+```
+
+Forcing means forcing: if the RIR lookup fails there is **no** fallback to the
+API, since a parameter that silently reverted could not be used to exercise the
+registry path.
+
+`rir` only modifies an org lookup. Supplied without `org=1` it does nothing, and
+the response says so rather than passing silently:
+
+```
+# rir: ignored (org lookup not requested)
+```
+
+The five registries answer in four different formats — ARIN serves flat
+`Key: value` lines, LACNIC uses `owner:`, APNIC and AFRINIC use `descr:` on the
+`aut-num` object, and RIPE returns an `org:` handle that costs one extra query
+to resolve into `org-name:`. Responses also contain the parent *as-block*, so
+the parser selects the object matching the queried ASN rather than reading the
+first description it sees. Queries to RPSL registries use the `-r` flag, which
+suppresses personal contact objects — the data RIPE rate-limits on.
 
 ## Upstream data sources
 
 | Source | URL | When it is contacted |
 | --- | --- | --- |
 | RADB WHOIS | `whois.radb.net:43` (raw WHOIS over TCP) | Every uncached request. |
-| WhoisFreaks ASN WHOIS API | `https://api.whoisfreaks.com/v2.0/asn-whois` | Only when `org` is enabled and an API key is set. |
-| IANA AS number registry | `https://www.iana.org/assignments/as-numbers/as-numbers-2.csv` | Build time only, via `go generate`. Never at runtime. |
+| RIR whois servers | `whois.{arin,ripe,apnic,lacnic,afrinic}.net:43` | Only for `org` lookups: when no API key is set, when the API fails, or when `rir=1`. |
+| WhoisFreaks ASN WHOIS API | `https://api.whoisfreaks.com/v2.0/asn-whois` | Only when `org` is enabled, an API key is set, and `rir=1` was not given. |
+| IANA AS number registries | `https://www.iana.org/assignments/as-numbers/as-numbers-1.csv` (16-bit)<br>`https://www.iana.org/assignments/as-numbers/as-numbers-2.csv` (32-bit) | Build time only, via `go generate` — two fetches total. Never at runtime. |
 
 ### RADB WHOIS
 
@@ -129,8 +167,21 @@ Queried on TCP port 43 with an inverse lookup on origin, terminated by CRLF:
 -i origin AS2906
 ```
 
-The response is scanned for `route6:` attributes. Defined in `main.go` as
-`whoisHost` / `whoisAddr`.
+The response is scanned for `route6:` attributes. Defined in
+`internal/radb/radb.go`.
+
+### RIR whois servers
+
+Which server is authoritative for an ASN comes from the generated IANA table,
+so no RIR-to-host mapping is hardcoded. The query is the ASN with an `AS`
+prefix, sent with `-r` to RPSL registries:
+
+```
+-r AS56554
+```
+
+Implemented in `internal/rirwhois/rirwhois.go`; the per-registry response
+formats are described under [`rir`](#rir--force-the-authoritative-rir).
 
 ### WhoisFreaks ASN WHOIS API
 
@@ -144,17 +195,22 @@ https://api.whoisfreaks.com/v2.0/asn-whois?apiKey=YOUR_API_KEY&asn=AS2906&format
 ```
 
 The organization name is read from the top-level `orgName` field, falling back
-to `asName` when `orgName` is empty. The endpoint is `orgAPIURL` in `main.go`.
+to `asName` when `orgName` is empty. Implemented in
+`internal/whoisfreaks/whoisfreaks.go`.
 
-### IANA AS number registry
+### IANA AS number registries
 
 Registry page: <https://www.iana.org/assignments/as-numbers/as-numbers.xhtml>
 
-The CSV above is the 32-bit sub-registry. `gen_asn_ranges.go` fetches it, keeps
-only rows whose description begins with `Assigned by ` (the five RIRs), and
-writes the resulting ranges to `asn_ranges_gen.go`. Rows marked `Unallocated`,
-`Reserved`, `Reserved for Private Use`, or `Reserved for use in documentation
-and sample code` are excluded, which is what makes those ASNs return `400`.
+`gen_asn_ranges.go` fetches both sub-registries — 16-bit and 32-bit — exactly
+once each at build time and keeps only rows whose description begins with
+`Assigned by ` (the five RIRs). Each kept row contributes its range, the
+registry name, and the authoritative whois server from the CSV's own `WHOIS`
+column. Rows marked `Unallocated`, `Reserved`, `Reserved for Private Use`,
+`Reserved for use in documentation and sample code`, or `AS_TRANS` are excluded,
+which is what makes those ASNs return `400`.
+
+The result is written to `internal/asnreg/ranges_gen.go`, which is committed.
 
 ## Configuration
 
@@ -162,7 +218,7 @@ and sample code` are excluded, which is what makes those ASNs return `400`.
 | --- | --- | --- |
 | `PORT` | `8080` | Port to listen on. The convention used by most serverless container platforms. |
 | `LISTEN_ADDR` | — | Full `host:port` override. Takes precedence over `PORT`. |
-| `WHOISFREAKS_API_KEY` | — | API key enabling the `org` parameter. Unset means `org` has no effect. |
+| `WHOISFREAKS_API_KEY` | — | Optional. When set, the WhoisFreaks API becomes the preferred `org` source; unset, `org` resolves via the ASN's RIR instead. Not required for `org` to work. |
 
 ## Caching
 
@@ -172,7 +228,9 @@ are not cached, so a transient outage doesn't lock out retries.
 
 The cache stores the un-aggregated prefix list and aggregation is applied when
 rendering, so `agg=0` and `agg=1` share a single upstream query. Organization
-names are cached separately on the same 5-minute TTL, since that API is metered.
+names are cached separately on the same 5-minute TTL, since the API is metered
+and RIR whois servers rate-limit. That cache is keyed by source as well as ASN,
+so a forced `rir=1` answer is never served to a default request, or vice versa.
 
 Note that concurrent first-time requests for the same uncached ASN may each
 trigger an upstream query; requests are not coalesced.
@@ -195,18 +253,31 @@ ignores `#` lines:
 
 ### ASN validation
 
-An ASN must be numeric and within the 32-bit AS number space (`0`–`4294967295`,
-which contains the 16-bit space `0`–`65535`).
+An ASN must be numeric, within the 32-bit AS number space (`0`–`4294967295`),
+and inside a range IANA has actually delegated to an RIR. Requests for
+unallocated, reserved, documentation, or private-use ranges are rejected with
+`400` instead of being sent upstream.
 
-Beyond that, ASNs above `65535` must fall inside a range IANA has actually
-delegated to an RIR. Requests for unallocated, reserved, documentation, or
-private-use ranges (such as `65540` or `4200000001`) are rejected with `400`
-instead of being sent upstream.
+This applies to the 16-bit space as well as the 32-bit space, so these are
+rejected despite being numerically valid:
 
-That allocation table is generated at build time from the
-[IANA AS number registry](https://www.iana.org/assignments/as-numbers/as-numbers-2.csv)
-into `asn_ranges_gen.go`, which is committed. The running service therefore
-needs no network access to IANA. Refresh it when the registry changes:
+| Rejected | Why |
+| --- | --- |
+| `0` | Reserved (RFC 7607) |
+| `23456` | AS_TRANS, the 4-byte transition placeholder (RFC 6793) |
+| `64496`–`64511` | Reserved for documentation and sample code (RFC 5398) |
+| `64512`–`65534` | Reserved for private use (RFC 6996) |
+| `65535` | Reserved (RFC 7300) |
+| `65540`, `4200000001`, … | Reserved or unallocated in the 32-bit space |
+
+> **Note:** private-use ASNs (`64512`–`65534`) previously returned `200` and now
+> return `400`. If you query this service for internal AS numbers, that is a
+> breaking change.
+
+The allocation table is generated at build time from both IANA sub-registries
+into `internal/asnreg/ranges_gen.go`, which is committed. The running service
+therefore needs no network access to IANA. Refresh it when the registries
+change:
 
 ```bash
 go generate ./...
@@ -215,24 +286,28 @@ go generate ./...
 ## Project layout
 
 Each upstream data source is isolated in its own package, so the network code
-for one cannot entangle with the other. Everything still compiles to a single
+for one cannot entangle with the others. Everything still compiles to a single
 binary — `internal/` packages are linked in, not separate services.
 
 ```
 main.go                        server wiring and graceful shutdown
 handler.go                     HTTP handler, parameter parsing, output rendering
-cache.go                       5-minute caches and the test seams
-asn.go                         ASN parsing and IANA range validation
+cache.go                       5-minute caches, org source resolution, test seams
+asn.go                         ASN parsing and validation
 prefixes.go                    route6 extraction, sorting, aggregation
-asn_ranges_gen.go              generated IANA allocation table
 gen_asn_ranges.go              generator (build-time only, //go:build ignore)
+internal/asnreg/               ASN → RIR table (generated) and lookup
 internal/radb/                 RADB WHOIS client (raw TCP, port 43)
+internal/rirwhois/             RIR WHOIS client + per-registry parsing
 internal/whoisfreaks/          WhoisFreaks organization lookup (HTTPS)
 ```
 
-The two client packages expose narrow APIs — `radb.Query(asn)` and
-`whoisfreaks.LookupOrgName(asn, apiKey)` — and the main package reaches them
-through overridable variables, so tests substitute both without a network.
+The packages expose narrow APIs — `radb.Query(asn)`,
+`whoisfreaks.LookupOrgName(asn, apiKey)`, `rirwhois.LookupOrgName(reg, asn)`,
+and `asnreg.Lookup(asn)` — and the main package reaches the network ones through
+overridable variables, so tests substitute all of them without a network. The
+`rirwhois` tests run against sanitized real responses in
+`internal/rirwhois/testdata/`, with contact details redacted.
 
 ## Build and run
 
@@ -281,11 +356,12 @@ written by Claude from a series of prompts describing the desired behavior.
 
 What was verified during development:
 
-- The service was run against the live RADB WHOIS server and the WhoisFreaks
-  ASN API, and the documented request and response examples are real output.
+- The service was run against the live RADB WHOIS server, the WhoisFreaks ASN
+  API, and all five RIR whois servers; the documented request and response
+  examples are real output.
 - `go vet` and the unit test suite pass; tests make no network calls.
-- The IANA allocation table in `asn_ranges_gen.go` was generated from the live
-  registry.
+- The IANA allocation table in `internal/asnreg/ranges_gen.go` was generated
+  from both live sub-registries.
 
 What was not:
 
