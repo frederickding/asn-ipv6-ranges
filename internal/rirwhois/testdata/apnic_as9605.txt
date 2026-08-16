@@ -1,0 +1,62 @@
+% [whois.apnic.net]
+% Whois data copyright terms    http://www.apnic.net/db/dbcopyright.html
+
+% Information related to 'AS9249 - AS10239'
+
+as-block:       AS9249 - AS10239
+descr:          APNIC ASN block
+remarks:        These AS numbers are further assigned by APNIC
+remarks:        to APNIC members and end-users in the APNIC region
+admin-c:        REDACTED
+tech-c:         REDACTED
+mnt-by:         APNIC-HM
+mnt-lower:      APNIC-HM
+last-modified:  2022-09-22T22:36:45Z
+source:         APNIC
+
+% Information related to 'AS9591 - AS9622'
+
+as-block:       AS9591 - AS9622
+descr:          JPNIC-2Byte-ASBLOCK-AP
+descr:          for assignment to JPNIC members
+country:        JP
+admin-c:        REDACTED
+tech-c:         REDACTED
+remarks:        Authoritative information regarding AS Number
+remarks:        assignments made from within this block can be
+remarks:        queried at whois.nic.ad.jp.
+remarks:        To only display English output,
+remarks:        add '/e' at the end of command,
+remarks:        e.g. 'whois -h whois.nic.ad.jp xxx/e'.
+mnt-by:         APNIC-HM
+mnt-lower:      MAINT-JPNIC
+last-modified:  2017-06-12T03:54:30Z
+source:         APNIC
+
+% Information related to 'AS9605'
+
+aut-num:        AS9605
+as-name:        docomo
+descr:          NTT DOCOMO, INC.
+import:         from AS4713 100 accept ANY
+import:         from AS703 100 accept ANY
+import:         from AS4694 100 accept ANY
+export:         to AS4713 announce AS9605
+export:         to AS703 announce AS9605
+export:         to AS4694 announce AS9605
+country:        JP
+admin-c:        REDACTED
+tech-c:         REDACTED
+last-modified:  2015-06-25T21:30:18Z
+remarks:        This information has been partially mirrored by APNIC from
+remarks:        JPNIC. To obtain more specific information, please use the
+remarks:        JPNIC WHOIS Gateway at
+remarks:        http://www.nic.ad.jp/en/db/whois/en-gateway.html or
+remarks:        whois.nic.ad.jp for WHOIS client. (The WHOIS client
+remarks:        defaults to Japanese output, use the /e switch for English
+remarks:        output)
+source:         JPNIC
+
+% This query was served by the APNIC Whois Service version 1.88.48 (WHOIS-US2)
+
+

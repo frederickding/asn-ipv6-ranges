@@ -104,13 +104,15 @@ func TestLookupOrgName(t *testing.T) {
 			wantQueries: []string{"-r AS56554", "-r ORG-IS136-RIPE"},
 		},
 		{
+			// AS9605 is an operator (NTT DOCOMO) rather than APNIC itself, so a
+			// correct answer here cannot be confused with APNIC boilerplate.
 			name: "APNIC falls back to descr on the aut-num",
 			reg:  asnreg.Registry{Name: "APNIC", WHOISHost: "whois.apnic.net"},
-			asn:  "4608",
+			asn:  "9605",
 			responses: map[string]string{
-				"-r AS4608": fixture(t, "apnic_as4608.txt"),
+				"-r AS9605": fixture(t, "apnic_as9605.txt"),
 			},
-			want: "Asia Pacific Network Information Centre",
+			want: "NTT DOCOMO, INC.",
 		},
 		{
 			name: "LACNIC uses owner",
@@ -161,25 +163,33 @@ func TestLookupOrgName(t *testing.T) {
 // whose descr names the block rather than the operator.
 func TestLookupOrgNameIgnoresASBlock(t *testing.T) {
 	for _, tc := range []struct {
-		name, file, query, reject string
-		reg                       asnreg.Registry
-		asn                       string
+		name, file, query string
+		reject            []string
+		want              string
+		reg               asnreg.Registry
+		asn               string
 	}{
 		{
 			name: "RIPE", file: "ripe_as56554.txt", query: "-r AS56554",
-			reject: "RIPE NCC ASN block",
+			reject: []string{"RIPE NCC ASN block"},
+			want:   "IETF Meeting Network",
 			reg:    asnreg.Registry{Name: "RIPE NCC", WHOISHost: "whois.ripe.net"}, asn: "56554",
 		},
 		{
-			name: "APNIC", file: "apnic_as4608.txt", query: "-r AS4608",
-			reject: "APNIC ASN block",
-			reg:    asnreg.Registry{Name: "APNIC", WHOISHost: "whois.apnic.net"}, asn: "4608",
+			// This response nests the aut-num under two as-blocks, so the
+			// operator name is the third descr in the stream.
+			name: "APNIC", file: "apnic_as9605.txt", query: "-r AS9605",
+			reject: []string{"APNIC ASN block", "JPNIC-2Byte-ASBLOCK-AP", "for assignment to JPNIC members"},
+			want:   "NTT DOCOMO, INC.",
+			reg:    asnreg.Registry{Name: "APNIC", WHOISHost: "whois.apnic.net"}, asn: "9605",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			body := fixture(t, tc.file)
-			if !strings.Contains(body, tc.reject) {
-				t.Fatalf("fixture no longer contains the as-block %q; the trap is untested", tc.reject)
+			for _, r := range tc.reject {
+				if !strings.Contains(body, r) {
+					t.Fatalf("fixture no longer contains the as-block text %q; the trap is untested", r)
+				}
 			}
 			// Only the aut-num query is answered, so no handle resolution occurs.
 			startFakeRIR(t, map[string]string{tc.query: body})
@@ -188,8 +198,13 @@ func TestLookupOrgNameIgnoresASBlock(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if got == tc.reject {
-				t.Fatalf("returned the as-block description %q instead of the operator", got)
+			for _, r := range tc.reject {
+				if got == r {
+					t.Fatalf("returned the as-block description %q instead of the operator", got)
+				}
+			}
+			if got != tc.want {
+				t.Errorf("got %q, want the operator name %q", got, tc.want)
 			}
 		})
 	}
