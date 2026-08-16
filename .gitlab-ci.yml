@@ -1,0 +1,7 @@
+include:
+  - component: $CI_SERVER_FQDN/components/go/test@1.1.1
+    inputs:
+      go_image: golang:1.24
+  - component: $CI_SERVER_FQDN/components/go/build@1.1.1
+    inputs:
+      go_image: golang:1.24
