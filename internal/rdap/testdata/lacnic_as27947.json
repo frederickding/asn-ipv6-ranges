@@ -1,0 +1,386 @@
+{
+  "rdapConformance": [
+    "rdap_level_0",
+    "cidr0",
+    "lacnic_level_0"
+  ],
+  "notices": [
+    {
+      "title": "Terms and Conditions",
+      "description": [
+        "This is the LACNIC RDAP service. Objects are in RDAP format."
+      ],
+      "links": [
+        {
+          "value": "https://www.lacnic.net/registration-data-access-protocol",
+          "rel": "terms-of-service",
+          "href": "https://www.lacnic.net/registration-data-access-protocol",
+          "type": "text/html"
+        }
+      ]
+    }
+  ],
+  "remarks": [
+    {
+      "description": [
+        "Autonomous System AS27947 from EC-TESA-LACNIC"
+      ],
+      "title": "description"
+    }
+  ],
+  "links": [
+    {
+      "value": "https://rdap.lacnic.net/rdap/autnum/AS27947",
+      "rel": "self",
+      "type": "application/rdap+json",
+      "href": "https://rdap.lacnic.net/rdap/autnum/AS27947"
+    }
+  ],
+  "events": [
+    {
+      "eventAction": "registration",
+      "eventDate": "2007-12-21T12:00:00Z"
+    },
+    {
+      "eventAction": "last changed",
+      "eventDate": "2019-04-24T19:07:39Z"
+    }
+  ],
+  "objectClassName": "autnum",
+  "handle": "AS27947",
+  "startAutnum": 27947,
+  "endAutnum": 27947,
+  "name": "27947",
+  "type": "DIRECT ALLOCATION",
+  "status": [
+    "active"
+  ],
+  "entities": [
+    {
+      "objectClassName": "entity",
+      "handle": "EC-TESA-LACNIC",
+      "roles": [
+        "registrant"
+      ],
+      "vcardArray": [
+        "vcard",
+        [
+          [
+            "version",
+            {},
+            "text",
+            "4.0"
+          ],
+          [
+            "fn",
+            {},
+            "text",
+            "Telconet S.A"
+          ],
+          [
+            "kind",
+            {},
+            "text",
+            "org"
+          ],
+          [
+            "adr",
+            {
+              "label": "Kennedy Norte MZ\nGuayaquil\n59342\nEC"
+            },
+            "text",
+            [
+              "",
+              "",
+              "REDACTED",
+              "",
+              "",
+              "",
+              ""
+            ]
+          ],
+          [
+            "tel",
+            {
+              "type": "voice"
+            },
+            "text",
+            "+0-000-000-0000"
+          ]
+        ]
+      ],
+      "events": [
+        {
+          "eventAction": "registration",
+          "eventDate": "2002-09-25T12:00:00Z"
+        },
+        {
+          "eventAction": "last changed",
+          "eventDate": "2024-09-02T23:00:37Z"
+        }
+      ],
+      "links": [
+        {
+          "value": "https://rdap.lacnic.net/rdap/entity/EC-TESA-LACNIC",
+          "rel": "self",
+          "type": "application/rdap+json",
+          "href": "https://rdap.lacnic.net/rdap/entity/EC-TESA-LACNIC"
+        }
+      ]
+    },
+    {
+      "objectClassName": "entity",
+      "handle": "TRS4",
+      "roles": [
+        "administrative"
+      ],
+      "vcardArray": [
+        "vcard",
+        [
+          [
+            "version",
+            {},
+            "text",
+            "4.0"
+          ],
+          [
+            "fn",
+            {},
+            "text",
+            "REDACTED PERSON"
+          ],
+          [
+            "kind",
+            {},
+            "text",
+            "individual"
+          ],
+          [
+            "adr",
+            {
+              "label": "Kennedy Norte MZ 109 SL 21\nGuayaquil\nEC"
+            },
+            "text",
+            [
+              "",
+              "",
+              "REDACTED",
+              "",
+              "",
+              "",
+              ""
+            ]
+          ],
+          [
+            "tel",
+            {
+              "type": "voice"
+            },
+            "text",
+            "+0-000-000-0000"
+          ],
+          [
+            "email",
+            {},
+            "text",
+            "redacted@example.invalid"
+          ],
+          [
+            "lang",
+            {},
+            "language-tag",
+            "es"
+          ]
+        ]
+      ],
+      "events": [
+        {
+          "eventAction": "registration",
+          "eventDate": "2011-10-25T18:43:22Z"
+        },
+        {
+          "eventAction": "last changed",
+          "eventDate": "2022-01-29T20:15:15Z"
+        }
+      ],
+      "links": [
+        {
+          "value": "https://rdap.lacnic.net/rdap/entity/TRS4",
+          "rel": "self",
+          "type": "application/rdap+json",
+          "href": "https://rdap.lacnic.net/rdap/entity/TRS4"
+        }
+      ]
+    },
+    {
+      "objectClassName": "entity",
+      "handle": "SEL",
+      "roles": [
+        "technical"
+      ],
+      "vcardArray": [
+        "vcard",
+        [
+          [
+            "version",
+            {},
+            "text",
+            "4.0"
+          ],
+          [
+            "fn",
+            {},
+            "text",
+            "REDACTED PERSON"
+          ],
+          [
+            "kind",
+            {},
+            "text",
+            "individual"
+          ],
+          [
+            "adr",
+            {
+              "label": "Solar 21\nKennedy Norte MZ\nGuayaquil\n59342\nEC"
+            },
+            "text",
+            [
+              "",
+              "",
+              "REDACTED",
+              "",
+              "",
+              "",
+              ""
+            ]
+          ],
+          [
+            "tel",
+            {
+              "type": "voice"
+            },
+            "text",
+            "+0-000-000-0000"
+          ],
+          [
+            "email",
+            {},
+            "text",
+            "redacted@example.invalid"
+          ],
+          [
+            "lang",
+            {},
+            "language-tag",
+            "es"
+          ]
+        ]
+      ],
+      "events": [
+        {
+          "eventAction": "registration",
+          "eventDate": "2002-10-04T12:00:00Z"
+        },
+        {
+          "eventAction": "last changed",
+          "eventDate": "2023-07-24T14:01:08Z"
+        }
+      ],
+      "links": [
+        {
+          "value": "https://rdap.lacnic.net/rdap/entity/SEL",
+          "rel": "self",
+          "type": "application/rdap+json",
+          "href": "https://rdap.lacnic.net/rdap/entity/SEL"
+        }
+      ]
+    },
+    {
+      "objectClassName": "entity",
+      "handle": "PAS130",
+      "roles": [
+        "abuse"
+      ],
+      "vcardArray": [
+        "vcard",
+        [
+          [
+            "version",
+            {},
+            "text",
+            "4.0"
+          ],
+          [
+            "fn",
+            {},
+            "text",
+            "REDACTED PERSON"
+          ],
+          [
+            "kind",
+            {},
+            "text",
+            "individual"
+          ],
+          [
+            "adr",
+            {
+              "label": "Kennedy Norte Mz. 109 S. 21\nGuayaquil\n090902\nEC"
+            },
+            "text",
+            [
+              "",
+              "",
+              "REDACTED",
+              "",
+              "",
+              "",
+              ""
+            ]
+          ],
+          [
+            "tel",
+            {
+              "type": "voice"
+            },
+            "text",
+            "+0-000-000-0000"
+          ],
+          [
+            "email",
+            {},
+            "text",
+            "redacted@example.invalid"
+          ],
+          [
+            "lang",
+            {},
+            "language-tag",
+            "es"
+          ]
+        ]
+      ],
+      "events": [
+        {
+          "eventAction": "registration",
+          "eventDate": "2019-04-24T19:01:00Z"
+        },
+        {
+          "eventAction": "last changed",
+          "eventDate": "2019-04-24T19:01:00Z"
+        }
+      ],
+      "links": [
+        {
+          "value": "https://rdap.lacnic.net/rdap/entity/PAS130",
+          "rel": "self",
+          "type": "application/rdap+json",
+          "href": "https://rdap.lacnic.net/rdap/entity/PAS130"
+        }
+      ]
+    }
+  ],
+  "lacnic_legalRepresentative": "TELCONET S. A.",
+  "port43": "whois.lacnic.net"
+}

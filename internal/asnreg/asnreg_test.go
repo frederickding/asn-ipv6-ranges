@@ -1,6 +1,10 @@
 package asnreg
 
-import "testing"
+import (
+	"net/url"
+	"strings"
+	"testing"
+)
 
 func TestLookup(t *testing.T) {
 	tests := []struct {
@@ -96,8 +100,18 @@ func TestRangesShape(t *testing.T) {
 func TestRegistriesWellFormed(t *testing.T) {
 	seen := make(map[string]bool)
 	for i, r := range registries {
-		if r.Name == "" || r.WHOISHost == "" {
+		if r.Name == "" || r.WHOISHost == "" || r.RDAPBase == "" {
 			t.Errorf("registry %d is incomplete: %+v", i, r)
+		}
+		// IANA publishes two URLs concatenated for some registries, e.g.
+		// "https://rdap.arin.net/registryhttp://rdap.arin.net/registry". The
+		// generator must split them; a surviving second scheme means it did not.
+		u, err := url.Parse(r.RDAPBase)
+		if err != nil || u.Scheme != "https" || u.Host == "" {
+			t.Errorf("registry %q has an unusable RDAPBase %q", r.Name, r.RDAPBase)
+		}
+		if strings.Contains(strings.TrimPrefix(r.RDAPBase, "https://"), "http") {
+			t.Errorf("registry %q RDAPBase still contains a second URL: %q", r.Name, r.RDAPBase)
 		}
 		if seen[r.Name] {
 			t.Errorf("duplicate registry name %q", r.Name)

@@ -41,6 +41,22 @@ func parseBoolParam(r *http.Request, name string, def bool) (bool, error) {
 	return v, nil
 }
 
+// parseEnumParam reads a GET parameter restricted to a fixed set of values,
+// from the URL query only, like parseBoolParam.
+func parseEnumParam(r *http.Request, name string, allowed []string, def string) (string, error) {
+	raw := r.URL.Query().Get(name)
+	if raw == "" {
+		return def, nil
+	}
+	v := strings.ToLower(raw)
+	for _, a := range allowed {
+		if v == a {
+			return v, nil
+		}
+	}
+	return "", fmt.Errorf("invalid %s value %q, expected one of %s", name, raw, strings.Join(allowed, ", "))
+}
+
 func asHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", "GET, HEAD")
@@ -70,7 +86,7 @@ func asHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "%v", err)
 		return
 	}
-	forceRIR, err := parseBoolParam(r, "rir", false)
+	orgSrc, err := parseEnumParam(r, "src", orgSources, srcAuto)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "%v", err)
 		return
@@ -90,13 +106,13 @@ func asHandler(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case wantOrg:
 		// An org lookup failure must not sink the prefix list.
-		if res, err := getOrgName(asn, v, forceRIR); err != nil {
+		if res, err := getOrgName(asn, v, orgSrc); err != nil {
 			fmt.Fprintf(&b, "# org: lookup failed: %s\n", singleLine(err.Error()))
 		} else {
 			fmt.Fprintf(&b, "# org: %s (source: %s)\n", singleLine(res.name), res.source)
 		}
-	case forceRIR:
-		b.WriteString("# rir: ignored (org lookup not requested)\n")
+	case r.URL.Query().Get("src") != "":
+		b.WriteString("# src: ignored (org lookup not requested)\n")
 	}
 	if aggregate {
 		b.WriteString("# aggregate: on (more-specifics covered by a broader prefix removed)\n")

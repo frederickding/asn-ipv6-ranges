@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -29,7 +30,46 @@ const (
 	assignedPrefix = "Assigned by "
 )
 
-type registry struct{ name, whois string }
+type registry struct{ name, whois, rdap string }
+
+// rdapBase extracts a usable RDAP base URL from the registry's RDAP column.
+//
+// IANA publishes two URLs concatenated with no separator for some registries,
+// e.g. ARIN's "https://rdap.arin.net/registryhttp://rdap.arin.net/registry".
+// Split on the embedded scheme and keep the https entry.
+func rdapBase(field string) (string, error) {
+	field = strings.TrimSpace(field)
+	if field == "" {
+		return "", fmt.Errorf("empty RDAP column")
+	}
+
+	// Cut at any scheme that starts after position 0, then keep the https one.
+	var candidates []string
+	rest := field
+	for {
+		next := -1
+		for _, scheme := range []string{"https://", "http://"} {
+			if i := strings.Index(rest[1:], scheme); i >= 0 && (next < 0 || i+1 < next) {
+				next = i + 1
+			}
+		}
+		if next < 0 {
+			candidates = append(candidates, rest)
+			break
+		}
+		candidates = append(candidates, rest[:next])
+		rest = rest[next:]
+	}
+
+	for _, c := range candidates {
+		u, err := url.Parse(c)
+		if err != nil || u.Scheme != "https" || u.Host == "" {
+			continue
+		}
+		return c, nil
+	}
+	return "", fmt.Errorf("no absolute https URL in %q", field)
+}
 
 type asnRange struct {
 	start, end uint32
@@ -86,7 +126,7 @@ func fetchRegistry(url string) ([][]string, error) {
 func parseAssignedRanges(rows [][]string) ([]asnRange, error) {
 	var ranges []asnRange
 	for i, row := range rows {
-		if i == 0 || len(row) < 3 {
+		if i == 0 || len(row) < 4 {
 			continue
 		}
 		if !strings.HasPrefix(row[1], assignedPrefix) {
@@ -97,11 +137,15 @@ func parseAssignedRanges(rows [][]string) ([]asnRange, error) {
 		if name == "" || whois == "" {
 			return nil, fmt.Errorf("row %d: assigned range %q has no registry name or whois host", i+1, row[0])
 		}
+		rdap, err := rdapBase(row[3])
+		if err != nil {
+			return nil, fmt.Errorf("row %d: assigned range %q: %w", i+1, row[0], err)
+		}
 		r, err := parseRange(row[0])
 		if err != nil {
 			return nil, fmt.Errorf("row %d: %w", i+1, err)
 		}
-		r.reg = registry{name: name, whois: whois}
+		r.reg = registry{name: name, whois: whois, rdap: rdap}
 		ranges = append(ranges, r)
 	}
 	return ranges, nil
@@ -203,7 +247,7 @@ func writeTable(ranges []asnRange, regs []registry, index map[registry]int) erro
 
 	b.WriteString("var registries = []Registry{\n")
 	for _, r := range regs {
-		fmt.Fprintf(&b, "\t{Name: %q, WHOISHost: %q},\n", r.name, r.whois)
+		fmt.Fprintf(&b, "\t{Name: %q, WHOISHost: %q, RDAPBase: %q},\n", r.name, r.whois, r.rdap)
 	}
 	b.WriteString("}\n\n")
 

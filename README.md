@@ -45,15 +45,20 @@ lookup runs — so a saved file records when its data was really fetched.
 
 ## Parameters
 
-All parameters accept `1`/`0` and `true`/`false` (case-insensitive; `t`/`f`
-also work). An empty value (`?agg=`) falls back to the default. Any other value
-returns `400`.
-
 | Parameter | Default | Effect |
 | --- | --- | --- |
 | `agg` | `1` (on) | Remove prefixes already covered by a broader prefix in the list. |
 | `org` | `0` (off) | Look up the ASN's organization name and report it in a comment. |
-| `rir` | `0` (off) | Force the org lookup to use the authoritative RIR, bypassing the WhoisFreaks API. |
+| `src` | `auto` | Choose which source answers the `org` lookup: `auto`, `api`, `whois`, `rdap`. |
+
+`agg` and `org` accept `1`/`0` and `true`/`false` (case-insensitive; `t`/`f`
+also work). An empty value (`?agg=`) falls back to the default. Any other value
+returns `400`.
+
+> **Breaking change:** the `rir` parameter has been removed in favour of `src`.
+> `?rir=1` is now an unrecognized parameter and is **silently ignored**, so a
+> caller relying on it gets `auto` behaviour rather than a forced registry
+> lookup. Use `?src=whois` instead.
 
 ### `agg` — prefix aggregation
 
@@ -78,8 +83,8 @@ covering prefix precedes anything beneath it.
 
 ### `org` — organization name lookup
 
-`org=1` performs an additional lookup for the ASN's organization name and adds
-an `# org:` comment naming the source that answered:
+`org=1` looks up the ASN's organization name and adds an `# org:` comment naming
+the source that answered:
 
 ```bash
 curl 'http://localhost:8080/as/2906?org=1'
@@ -91,21 +96,34 @@ curl 'http://localhost:8080/as/2906?org=1'
 ...
 ```
 
-There are two sources, and **no configuration is required** — the authoritative
-RIR is always available:
+There are three sources, and **no configuration is required** — the two registry
+sources are always available:
 
 | Source | Requires | Notes |
 | --- | --- | --- |
-| The ASN's RIR whois server | nothing | Chosen from the IANA-derived table, e.g. `whois.arin.net` for AS2906 |
-| [WhoisFreaks ASN WHOIS API](https://whoisfreaks.com/documentation/asn-whois-api) | `WHOISFREAKS_API_KEY` | Normalized single-field answer |
+| RIR whois (port 43) | nothing | Per-registry text formats; two queries for RIPE |
+| RIR RDAP (HTTPS) | nothing | Structured JSON; one query |
+| [WhoisFreaks API](https://whoisfreaks.com/documentation/asn-whois-api) | `WHOISFREAKS_API_KEY` | Normalized single-field answer |
 
-By default the API is tried first **when a key is set**, falling back to the RIR
-if it fails; with no key, the RIR is used directly. Use [`rir`](#rir--force-the-authoritative-rir)
-to force the registry path. The `(source: …)` annotation always reports which
-one actually answered.
+With `src=auto` (the default) the API is tried first **when a key is set**, then
+the two registry sources. Which registry source goes first depends on the
+registry:
 
-The lookup is never performed unless `org` is explicitly enabled, so the service
-contacts neither source by default.
+| Registry | Order | Why |
+| --- | --- | --- |
+| RIPE NCC | RDAP, then whois | RIPE aut-num objects carry the operator's full routing policy. AS24940 answers with 60,151 bytes over whois — 58,926 of them 1,306 `import:`/`export:` lines — and needs a second query to resolve the `org:` handle. RDAP returns the same name in 14,925 bytes and one request. |
+| all others | whois, then RDAP | whois is smaller and single-query: ARIN AS2906 is 1,683 bytes versus 5,432 over RDAP. |
+
+Port 43 offers no way to exclude attributes — `-K` drops the `org:` handle the
+lookup needs and `-F` only abbreviates attribute names — so for RIPE the saving
+has to come from switching protocol.
+
+Both orders fall through to the other source on failure, so this is a cost
+optimization rather than a change in which names resolve. The `(source: …)`
+annotation always reports which one actually answered.
+
+The lookup is never performed unless `org` is enabled, so the service contacts
+none of these by default.
 
 A failed lookup does not fail the request — the prefix list is the primary
 output, so the response is still `200` with the reason in a comment:
@@ -115,48 +133,73 @@ output, so the response is still `200` with the reason in a comment:
 ```
 
 The API key is stripped from any error text before it reaches the response, and
-names from either source are flattened to a single line so they cannot escape
+names from every source are flattened to a single line so they cannot escape
 their comment and forge a prefix entry.
 
-### `rir` — force the authoritative RIR
+### `src` — choosing the org source
 
-`rir=1` skips the WhoisFreaks API entirely, even when a key is configured, and
-resolves the name from the registry that administers the ASN:
+| `src` | Behavior |
+| --- | --- |
+| `auto` (default) | API when keyed, then the registry sources in the order above |
+| `api` | WhoisFreaks only |
+| `whois` | RIR whois only |
+| `rdap` | RIR RDAP only |
 
 ```bash
-curl 'http://localhost:8080/as/2906?org=1&rir=1'
+curl 'http://localhost:8080/as/24940?org=1&src=rdap'
 ```
 
 ```
-# org: Netflix Streaming Services Inc. (source: whois.arin.net)
+# org: Hetzner Online GmbH (source: rdap.db.ripe.net)
 ```
 
-Forcing means forcing: if the RIR lookup fails there is **no** fallback to the
-API, since a parameter that silently reverted could not be used to exercise the
-registry path.
+**An explicit source never falls back.** If `src=whois` fails, the failure is
+reported rather than another source being tried silently — otherwise the
+parameter could not be trusted to exercise one path. `src=api` without a key
+configured is likewise a reported failure, not a silent skip:
 
-`rir` only modifies an org lookup. Supplied without `org=1` it does nothing, and
+```
+# org: lookup failed: api selected but WHOISFREAKS_API_KEY is not set
+```
+
+`src` only modifies an org lookup. Supplied without `org=1` it does nothing, and
 the response says so rather than passing silently:
 
 ```
-# rir: ignored (org lookup not requested)
+# src: ignored (org lookup not requested)
 ```
 
-The five registries answer in four different formats — ARIN serves flat
-`Key: value` lines, LACNIC uses `owner:`, APNIC and AFRINIC use `descr:` on the
-`aut-num` object, and RIPE returns an `org:` handle that costs one extra query
-to resolve into `org-name:`. Responses also contain the parent *as-block*, so
-the parser selects the object matching the queried ASN rather than reading the
-first description it sees. Queries to RPSL registries use the `-r` flag, which
-suppresses personal contact objects — the data RIPE rate-limits on.
+An unrecognized value returns `400` naming the valid ones.
+
+#### Why the registry sources need per-registry rules
+
+Neither protocol is uniform across the five RIRs.
+
+Over **whois**, ARIN serves flat `Key: value` lines, LACNIC uses `owner:`, APNIC
+and AFRINIC use `descr:` on the `aut-num` object, and RIPE returns an `org:`
+handle that costs a second query to resolve into `org-name:`. Responses also
+contain the parent *as-block*, so the parser selects the object matching the
+queried ASN rather than reading the first description it sees. Queries to RPSL
+registries use `-r`, which suppresses personal contact objects — the data RIPE
+rate-limits on.
+
+Over **RDAP** the transport is uniform but the placement is not. The name is
+taken from the entity whose role is `registrant` *and* whose vCard `kind` is
+`org`; both halves matter, because RIPE returns several `registrant` entities
+(maintainer handles such as `HOS-GUN` alongside the real `ORG-…` object) and a
+`kind=group` contact role. APNIC omits the registrant entity on some objects —
+AS9605 has only the delegating registry, JPNIC — so the name falls back to the
+remark titled `description`, taking its first line only, since that array
+continues into a postal address.
 
 ## Upstream data sources
 
 | Source | URL | When it is contacted |
 | --- | --- | --- |
 | RADB WHOIS | `whois.radb.net:43` (raw WHOIS over TCP) | Every uncached request. |
-| RIR whois servers | `whois.{arin,ripe,apnic,lacnic,afrinic}.net:43` | Only for `org` lookups: when no API key is set, when the API fails, or when `rir=1`. |
-| WhoisFreaks ASN WHOIS API | `https://api.whoisfreaks.com/v2.0/asn-whois` | Only when `org` is enabled, an API key is set, and `rir=1` was not given. |
+| RIR whois servers | `whois.{arin,ripe,apnic,lacnic,afrinic}.net:43` | Only for `org` lookups, per the source order above, or when `src=whois`. |
+| RIR RDAP endpoints | `https://rdap.arin.net/registry`<br>`https://rdap.db.ripe.net/`<br>`https://rdap.apnic.net/`<br>`https://rdap.lacnic.net/rdap/`<br>`https://rdap.afrinic.net/rdap/` | Only for `org` lookups, per the source order above, or when `src=rdap`. |
+| WhoisFreaks ASN WHOIS API | `https://api.whoisfreaks.com/v2.0/asn-whois` | Only when `org` is enabled and an API key is set, unless `src` selects another source. |
 | IANA AS number registries | `https://www.iana.org/assignments/as-numbers/as-numbers-1.csv` (16-bit)<br>`https://www.iana.org/assignments/as-numbers/as-numbers-2.csv` (32-bit) | Build time only, via `go generate` — two fetches total. Never at runtime. |
 
 ### RADB WHOIS
@@ -181,7 +224,23 @@ prefix, sent with `-r` to RPSL registries:
 ```
 
 Implemented in `internal/rirwhois/rirwhois.go`; the per-registry response
-formats are described under [`rir`](#rir--force-the-authoritative-rir).
+formats are described under [`src`](#src--choosing-the-org-source).
+
+### RIR RDAP endpoints
+
+The base URL for each registry comes from the `RDAP` column of the same IANA
+CSVs, so it is not hardcoded either. Requests are
+`GET {base}/autnum/{asn}` with `Accept: application/rdap+json`:
+
+```
+https://rdap.db.ripe.net/autnum/24940
+```
+
+Implemented in `internal/rdap/rdap.go`.
+
+> IANA publishes that column with two URLs concatenated for ARIN and AFRINIC
+> (`https://rdap.arin.net/registryhttp://rdap.arin.net/registry`). The generator
+> splits on the embedded scheme and keeps the `https` entry.
 
 ### WhoisFreaks ASN WHOIS API
 
@@ -205,8 +264,8 @@ Registry page: <https://www.iana.org/assignments/as-numbers/as-numbers.xhtml>
 `gen_asn_ranges.go` fetches both sub-registries — 16-bit and 32-bit — exactly
 once each at build time and keeps only rows whose description begins with
 `Assigned by ` (the five RIRs). Each kept row contributes its range, the
-registry name, and the authoritative whois server from the CSV's own `WHOIS`
-column. Rows marked `Unallocated`, `Reserved`, `Reserved for Private Use`,
+registry name, and the authoritative whois server and RDAP base from the CSV's
+own `WHOIS` and `RDAP` columns. Rows marked `Unallocated`, `Reserved`, `Reserved for Private Use`,
 `Reserved for use in documentation and sample code`, or `AS_TRANS` are excluded,
 which is what makes those ASNs return `400`.
 
@@ -218,7 +277,7 @@ The result is written to `internal/asnreg/ranges_gen.go`, which is committed.
 | --- | --- | --- |
 | `PORT` | `8080` | Port to listen on. The convention used by most serverless container platforms. |
 | `LISTEN_ADDR` | — | Full `host:port` override. Takes precedence over `PORT`. |
-| `WHOISFREAKS_API_KEY` | — | Optional. When set, the WhoisFreaks API becomes the preferred `org` source; unset, `org` resolves via the ASN's RIR instead. Not required for `org` to work. |
+| `WHOISFREAKS_API_KEY` | — | Optional. When set, the WhoisFreaks API becomes the first `org` source tried; unset, `org` resolves from the ASN's registry instead. Not required for `org` to work. |
 
 ## Caching
 
@@ -229,8 +288,9 @@ are not cached, so a transient outage doesn't lock out retries.
 The cache stores the un-aggregated prefix list and aggregation is applied when
 rendering, so `agg=0` and `agg=1` share a single upstream query. Organization
 names are cached separately on the same 5-minute TTL, since the API is metered
-and RIR whois servers rate-limit. That cache is keyed by source as well as ASN,
-so a forced `rir=1` answer is never served to a default request, or vice versa.
+and registry servers rate-limit. That cache is keyed by the requested `src` as
+well as the ASN, so a `src=rdap` answer is never served to an `auto` request, or
+vice versa — the reported source is always the one that actually answered.
 
 Note that concurrent first-time requests for the same uncached ASN may each
 trigger an upstream query; requests are not coalesced.
@@ -296,18 +356,20 @@ cache.go                       5-minute caches, org source resolution, test seam
 asn.go                         ASN parsing and validation
 prefixes.go                    route6 extraction, sorting, aggregation
 gen_asn_ranges.go              generator (build-time only, //go:build ignore)
-internal/asnreg/               ASN → RIR table (generated) and lookup
+internal/asnreg/               ASN → RIR table (generated): whois host + RDAP base
 internal/radb/                 RADB WHOIS client (raw TCP, port 43)
 internal/rirwhois/             RIR WHOIS client + per-registry parsing
+internal/rdap/                 RIR RDAP client + jCard extraction
 internal/whoisfreaks/          WhoisFreaks organization lookup (HTTPS)
 ```
 
 The packages expose narrow APIs — `radb.Query(asn)`,
 `whoisfreaks.LookupOrgName(asn, apiKey)`, `rirwhois.LookupOrgName(reg, asn)`,
-and `asnreg.Lookup(asn)` — and the main package reaches the network ones through
-overridable variables, so tests substitute all of them without a network. The
-`rirwhois` tests run against sanitized real responses in
-`internal/rirwhois/testdata/`, with contact details redacted.
+`rdap.LookupOrgName(reg, asn)`, and `asnreg.Lookup(asn)` — and the main package
+reaches the network ones through overridable variables, so tests substitute all
+of them without a network. The `rirwhois` and `rdap` tests run against sanitized
+real responses in their `testdata/` directories, with contact details redacted
+and a test that fails if an unredacted address or personal name reappears.
 
 ## Build and run
 

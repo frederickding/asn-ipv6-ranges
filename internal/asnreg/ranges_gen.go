@@ -8,11 +8,11 @@
 package asnreg
 
 var registries = []Registry{
-	{Name: "AFRINIC", WHOISHost: "whois.afrinic.net"},
-	{Name: "APNIC", WHOISHost: "whois.apnic.net"},
-	{Name: "ARIN", WHOISHost: "whois.arin.net"},
-	{Name: "LACNIC", WHOISHost: "whois.lacnic.net"},
-	{Name: "RIPE NCC", WHOISHost: "whois.ripe.net"},
+	{Name: "AFRINIC", WHOISHost: "whois.afrinic.net", RDAPBase: "https://rdap.afrinic.net/rdap/"},
+	{Name: "APNIC", WHOISHost: "whois.apnic.net", RDAPBase: "https://rdap.apnic.net/"},
+	{Name: "ARIN", WHOISHost: "whois.arin.net", RDAPBase: "https://rdap.arin.net/registry"},
+	{Name: "LACNIC", WHOISHost: "whois.lacnic.net", RDAPBase: "https://rdap.lacnic.net/rdap/"},
+	{Name: "RIPE NCC", WHOISHost: "whois.ripe.net", RDAPBase: "https://rdap.db.ripe.net/"},
 }
 
 // ranges is sorted by start and non-overlapping, which Lookup relies on

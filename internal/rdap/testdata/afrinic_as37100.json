@@ -1,0 +1,364 @@
+{
+  "rdapConformance": [
+    "rdap_level_0",
+    "nro_rdap_profile_0",
+    "nro_rdap_profile_asn_flat_0"
+  ],
+  "notices": [
+    {
+      "title": "ABOUT",
+      "description": [
+        "This is the AfriNIC RDAP server."
+      ],
+      "links": [
+        {
+          "value": "https://rdap.afrinic.net/rdap/autnum/AS37100",
+          "rel": "describedby",
+          "href": "https://www.afrinic.net/support/whois-db/reference-manual",
+          "hreflang": [
+            "en"
+          ],
+          "type": "text/html",
+          "title": "AFRINIC Database Reference Manual",
+          "media": "screen"
+        }
+      ]
+    },
+    {
+      "title": "Terms and Conditions",
+      "description": [
+        "This is the AFRINIC Database query service. The objects are in RDAP format."
+      ],
+      "links": [
+        {
+          "value": "https://rdap.afrinic.net/rdap/autnum/AS37100",
+          "rel": "terms-of-service",
+          "href": "https://afrinic.net/whois/terms",
+          "type": "text/html"
+        }
+      ]
+    },
+    {
+      "title": "Whois Inaccuracy Reporting",
+      "description": [
+        "If you see inaccuracies in the results, please visit: "
+      ],
+      "links": [
+        {
+          "value": "https://rdap.afrinic.net/rdap/autnum/AS37100",
+          "rel": "inaccuracy-report",
+          "href": "https://www.afrinic.net/support/whois-db/reference-manual",
+          "type": "text/html",
+          "title": "AFRINIC WHOIS Inaccuracy Report"
+        }
+      ]
+    },
+    {
+      "title": "jCard sunset end",
+      "description": [
+        "2023-12-31T23:59:59Z"
+      ],
+      "links": [
+        {
+          "value": "https://rdap.afrinic.net/rdap/autnum/AS37100",
+          "rel": "related",
+          "href": "https://www.ietf.org/id/draft-ietf-regext-rdap-jscontact-12.html",
+          "type": "text/html",
+          "title": "jCard deprecation and replacement with JSContact Card"
+        },
+        {
+          "value": "https://rdap.afrinic.net/rdap/autnum/AS37100",
+          "rel": "alternate",
+          "href": "https://rdap.afrinic.net/rdap/autnum/AS37100?jscard=1",
+          "type": "application/rdap+json",
+          "title": "JSContact Card version"
+        }
+      ]
+    },
+    {
+      "title": "jCard deprecation end",
+      "description": [
+        "2022-12-31T23:59:59Z"
+      ],
+      "links": [
+        {
+          "value": "https://rdap.afrinic.net/rdap/autnum/AS37100",
+          "rel": "related",
+          "href": "https://www.ietf.org/id/draft-ietf-regext-rdap-jscontact-12.html",
+          "type": "text/html",
+          "title": "jCard deprecation and replacement with JSContact Card"
+        },
+        {
+          "value": "https://rdap.afrinic.net/rdap/autnum/AS37100",
+          "rel": "alternate",
+          "href": "https://rdap.afrinic.net/rdap/autnum/AS37100?jscard=1",
+          "type": "application/rdap+json",
+          "title": "JSContact Card version"
+        }
+      ]
+    }
+  ],
+  "handle": "AS37100",
+  "lang": "en",
+  "links": [
+    {
+      "value": "https://rdap.afrinic.net/rdap/autnum/AS37100",
+      "rel": "self",
+      "href": "https://rdap.afrinic.net/rdap/autnum/AS37100"
+    }
+  ],
+  "events": [
+    {
+      "eventAction": "registration",
+      "eventDate": "2009-05-28T08:11:00Z"
+    },
+    {
+      "eventAction": "last changed",
+      "eventDate": "2025-05-26T07:37:00Z"
+    }
+  ],
+  "status": [
+    "active"
+  ],
+  "port43": "whois.afrinic.net",
+  "name": "ORG-SL75-AFRINIC",
+  "entities": [
+    {
+      "handle": "ORG-SL75-AFRINIC",
+      "lang": "en",
+      "links": [
+        {
+          "value": "https://rdap.afrinic.net/rdap/entity/ORG-SL75-AFRINIC",
+          "rel": "self",
+          "href": "https://rdap.afrinic.net/rdap/entity/ORG-SL75-AFRINIC"
+        }
+      ],
+      "status": [
+        "active"
+      ],
+      "port43": "whois.afrinic.net",
+      "vcardArray": [
+        "vcard",
+        [
+          [
+            "version",
+            {},
+            "text",
+            "4.0"
+          ],
+          [
+            "kind",
+            {},
+            "text",
+            "org"
+          ],
+          [
+            "fn",
+            {},
+            "text",
+            "SEACOM Limited"
+          ],
+          [
+            "tel",
+            {
+              "type": "work"
+            },
+            "text",
+            "+0-000-000-0000"
+          ],
+          [
+            "tel",
+            {
+              "type": "work"
+            },
+            "text",
+            "+0-000-000-0000"
+          ],
+          [
+            "tel",
+            {
+              "type": "work"
+            },
+            "text",
+            "+0-000-000-0000"
+          ],
+          [
+            "email",
+            {},
+            "text",
+            "redacted@example.invalid"
+          ],
+          [
+            "adr",
+            {
+              "label": "1st Floor, North Wing\nOrange Tower, Cybercity\nEbene"
+            },
+            "text",
+            [
+              "",
+              "",
+              "REDACTED",
+              "",
+              "",
+              "",
+              ""
+            ]
+          ]
+        ]
+      ],
+      "roles": [
+        "registrant"
+      ],
+      "objectClassName": "entity"
+    },
+    {
+      "handle": "NM101-AFRINIC",
+      "lang": "en",
+      "links": [
+        {
+          "value": "https://rdap.afrinic.net/rdap/entity/NM101-AFRINIC",
+          "rel": "self",
+          "href": "https://rdap.afrinic.net/rdap/entity/NM101-AFRINIC"
+        }
+      ],
+      "status": [
+        "active"
+      ],
+      "port43": "whois.afrinic.net",
+      "vcardArray": [
+        "vcard",
+        [
+          [
+            "version",
+            {},
+            "text",
+            "4.0"
+          ],
+          [
+            "kind",
+            {},
+            "text",
+            "individual"
+          ],
+          [
+            "fn",
+            {},
+            "text",
+            "REDACTED PERSON"
+          ],
+          [
+            "tel",
+            {
+              "type": "work"
+            },
+            "text",
+            "+0-000-000-0000"
+          ],
+          [
+            "email",
+            {},
+            "text",
+            "redacted@example.invalid"
+          ],
+          [
+            "adr",
+            {
+              "label": "SEACOM\nDar Es Salaam\nTanzania, United Republic of"
+            },
+            "text",
+            [
+              "",
+              "",
+              "REDACTED",
+              "",
+              "",
+              "",
+              ""
+            ]
+          ]
+        ]
+      ],
+      "roles": [
+        "administrative",
+        "technical"
+      ],
+      "objectClassName": "entity"
+    },
+    {
+      "handle": "KM65-AFRINIC",
+      "lang": "en",
+      "links": [
+        {
+          "value": "https://rdap.afrinic.net/rdap/entity/KM65-AFRINIC",
+          "rel": "self",
+          "href": "https://rdap.afrinic.net/rdap/entity/KM65-AFRINIC"
+        }
+      ],
+      "status": [
+        "active"
+      ],
+      "port43": "whois.afrinic.net",
+      "vcardArray": [
+        "vcard",
+        [
+          [
+            "version",
+            {},
+            "text",
+            "4.0"
+          ],
+          [
+            "kind",
+            {},
+            "text",
+            "individual"
+          ],
+          [
+            "fn",
+            {},
+            "text",
+            "REDACTED PERSON"
+          ],
+          [
+            "tel",
+            {
+              "type": "work"
+            },
+            "text",
+            "+0-000-000-0000"
+          ],
+          [
+            "email",
+            {},
+            "text",
+            "redacted@example.invalid"
+          ],
+          [
+            "adr",
+            {
+              "label": "1st Flr, KAM Building, Nairobi, Kenya"
+            },
+            "text",
+            [
+              "",
+              "",
+              "REDACTED",
+              "",
+              "",
+              "",
+              ""
+            ]
+          ]
+        ]
+      ],
+      "roles": [
+        "administrative",
+        "technical"
+      ],
+      "objectClassName": "entity"
+    }
+  ],
+  "startAutnum": 37100,
+  "endAutnum": 37100,
+  "objectClassName": "autnum"
+}

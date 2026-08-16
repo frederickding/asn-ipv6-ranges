@@ -61,7 +61,7 @@ func aggregateStrings(input string) []string {
 // API or a real RIR whois server.
 func swapTestHooks(t *testing.T, clock *time.Time, query func(string) (string, error)) {
 	t.Helper()
-	origQuery, origAPI, origRIR := whoisQuery, orgAPILookup, orgRIRLookup
+	origQuery, origAPI, origRIR, origRDAP := whoisQuery, orgAPILookup, orgRIRLookup, orgRDAPLookup
 	origNow, origGetenv := nowFunc, getenv
 
 	whoisQuery = query
@@ -73,6 +73,10 @@ func swapTestHooks(t *testing.T, clock *time.Time, query func(string) (string, e
 	orgRIRLookup = func(asnreg.Registry, string) (string, error) {
 		t.Error("RIR whois called without an explicit test hook")
 		return "", errors.New("unexpected RIR lookup")
+	}
+	orgRDAPLookup = func(asnreg.Registry, string) (string, error) {
+		t.Error("RIR RDAP called without an explicit test hook")
+		return "", errors.New("unexpected RDAP lookup")
 	}
 	getenv = func(string) string { return "" }
 
@@ -87,7 +91,7 @@ func swapTestHooks(t *testing.T, clock *time.Time, query func(string) (string, e
 	resetCaches()
 
 	t.Cleanup(func() {
-		whoisQuery, orgAPILookup, orgRIRLookup = origQuery, origAPI, origRIR
+		whoisQuery, orgAPILookup, orgRIRLookup, orgRDAPLookup = origQuery, origAPI, origRIR, origRDAP
 		nowFunc, getenv = origNow, origGetenv
 		resetCaches()
 	})

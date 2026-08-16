@@ -5,10 +5,11 @@ package asnreg
 
 import "sort"
 
-// Registry identifies an RIR and its authoritative whois server.
+// Registry identifies an RIR and the two ways to query it.
 type Registry struct {
 	Name      string // e.g. "ARIN", "RIPE NCC"
 	WHOISHost string // e.g. "whois.arin.net"
+	RDAPBase  string // e.g. "https://rdap.arin.net/registry"
 }
 
 // asnRange is a half-open-free, fully inclusive range [start, end] delegated to

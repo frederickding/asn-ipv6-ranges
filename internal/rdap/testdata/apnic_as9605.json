@@ -1,0 +1,187 @@
+{
+  "rdapConformance": [
+    "nro_rdap_profile_0",
+    "nro_rdap_profile_asn_hierarchical_0",
+    "cidr0",
+    "rdap_level_0"
+  ],
+  "notices": [
+    {
+      "title": "Source",
+      "description": [
+        "Objects returned came from source",
+        "JPNIC"
+      ]
+    },
+    {
+      "title": "Terms and Conditions",
+      "description": [
+        "This is the APNIC WHOIS Database query service. The objects are in RDAP format.",
+        "This information has been partially mirrored by APNIC from JPNIC. To obtain more specific information, please use the JPNIC WHOIS Gateway at http://www.nic.ad.jp/en/db/whois/en-gateway.html or whois.nic.ad.jp for WHOIS client. (The WHOIS client defaults to Japanese output, use the /e switch for English output)"
+      ],
+      "links": [
+        {
+          "value": "https://jpnic.rdap.apnic.net/autnum/9605",
+          "rel": "terms-of-service",
+          "href": "http://www.apnic.net/db/dbcopyright.html",
+          "type": "text/html"
+        }
+      ]
+    },
+    {
+      "title": "Whois Inaccuracy Reporting",
+      "description": [
+        "If you see inaccuracies in the results, please visit: "
+      ],
+      "links": [
+        {
+          "value": "https://jpnic.rdap.apnic.net/autnum/9605",
+          "rel": "inaccuracy-report",
+          "href": "https://www.apnic.net/manage-ip/using-whois/abuse-and-spamming/invalid-contact-form",
+          "type": "text/html"
+        }
+      ]
+    }
+  ],
+  "country": "JP",
+  "name": "docomo",
+  "status": [
+    "active"
+  ],
+  "events": [
+    {
+      "eventAction": "last changed",
+      "eventDate": "2015-06-25T21:30:18Z"
+    }
+  ],
+  "links": [
+    {
+      "value": "https://jpnic.rdap.apnic.net/autnum/9605",
+      "rel": "self",
+      "href": "https://jpnic.rdap.apnic.net/autnum/9605",
+      "type": "application/rdap+json"
+    }
+  ],
+  "remarks": [
+    {
+      "description": [
+        "NTT DOCOMO, INC."
+      ],
+      "title": "description"
+    }
+  ],
+  "entities": [
+    {
+      "roles": [
+        "technical",
+        "administrative"
+      ],
+      "events": [
+        {
+          "eventAction": "last changed",
+          "eventDate": "2022-01-05T03:04:02Z"
+        }
+      ],
+      "links": [
+        {
+          "value": "https://jpnic.rdap.apnic.net/autnum/9605",
+          "rel": "self",
+          "href": "https://jpnic.rdap.apnic.net/entity/JNIC1-AP",
+          "type": "application/rdap+json"
+        }
+      ],
+      "handle": "JNIC1-AP",
+      "objectClassName": "entity",
+      "vcardArray": [
+        "vcard",
+        [
+          [
+            "version",
+            {},
+            "text",
+            "4.0"
+          ],
+          [
+            "fn",
+            {},
+            "text",
+            "Japan Network Information Center"
+          ],
+          [
+            "kind",
+            {},
+            "text",
+            "group"
+          ],
+          [
+            "adr",
+            {
+              "label": "Uchikanda OS Bldg 4F, 2-12-6 Uchi-Kanda\nChiyoda-ku, Tokyo 101-0047, Japan"
+            },
+            "text",
+            [
+              "",
+              "",
+              "REDACTED",
+              "",
+              "",
+              "",
+              ""
+            ]
+          ],
+          [
+            "tel",
+            {
+              "type": "voice"
+            },
+            "text",
+            "+0-000-000-0000"
+          ],
+          [
+            "tel",
+            {
+              "type": "fax"
+            },
+            "text",
+            "+0-000-000-0000"
+          ],
+          [
+            "email",
+            {},
+            "text",
+            "redacted@example.invalid"
+          ]
+        ]
+      ]
+    },
+    {
+      "roles": [
+        "technical",
+        "administrative"
+      ],
+      "links": [
+        {
+          "value": "https://jpnic.rdap.apnic.net/autnum/9605",
+          "rel": "related",
+          "href": "http://whois.nic.ad.jp/cgi-bin/whois_gw?key=JP00042969/e",
+          "type": "text/html",
+          "hreflang": "en"
+        },
+        {
+          "value": "https://jpnic.rdap.apnic.net/autnum/9605",
+          "rel": "related",
+          "href": "http://whois.nic.ad.jp/cgi-bin/whois_gw?key=JP00042969",
+          "type": "text/html",
+          "hreflang": "jp"
+        }
+      ],
+      "handle": "JP00042969",
+      "objectClassName": "entity"
+    }
+  ],
+  "handle": "AS9605",
+  "startAutnum": 9605,
+  "endAutnum": 9605,
+  "objectClassName": "autnum",
+  "port43": "whois.apnic.net"
+}

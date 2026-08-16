@@ -1,0 +1,346 @@
+{
+  "endAutnum": 2906,
+  "entities": [
+    {
+      "entities": [
+        {
+          "events": [
+            {
+              "eventAction": "last changed",
+              "eventDate": "2026-06-17T16:01:25-04:00"
+            },
+            {
+              "eventAction": "registration",
+              "eventDate": "2012-04-18T08:25:00-04:00"
+            }
+          ],
+          "handle": "SNO92-ARIN",
+          "links": [
+            {
+              "href": "https://rdap.arin.net/registry/entity/SNO92-ARIN",
+              "rel": "self",
+              "type": "application/rdap+json",
+              "value": "https://rdap.arin.net/registry/autnum/2906"
+            },
+            {
+              "href": "https://whois.arin.net/rest/poc/SNO92-ARIN",
+              "rel": "alternate",
+              "type": "application/xml",
+              "value": "https://rdap.arin.net/registry/autnum/2906"
+            }
+          ],
+          "objectClassName": "entity",
+          "port43": "whois.arin.net",
+          "roles": [
+            "abuse",
+            "technical"
+          ],
+          "status": [
+            "validated"
+          ],
+          "vcardArray": [
+            "vcard",
+            [
+              [
+                "version",
+                {},
+                "text",
+                "4.0"
+              ],
+              [
+                "adr",
+                {
+                  "label": "100 Winchester Circle\nLos Gatos\nCA\n95032\nUnited States"
+                },
+                "text",
+                [
+                  "",
+                  "",
+                  "REDACTED",
+                  "",
+                  "",
+                  "",
+                  ""
+                ]
+              ],
+              [
+                "fn",
+                {},
+                "text",
+                "Streaming Network Operations"
+              ],
+              [
+                "org",
+                {},
+                "text",
+                "Netflix Streaming, Inc."
+              ],
+              [
+                "kind",
+                {},
+                "text",
+                "group"
+              ],
+              [
+                "email",
+                {},
+                "text",
+                "redacted@example.invalid"
+              ],
+              [
+                "tel",
+                {
+                  "type": [
+                    "work",
+                    "voice"
+                  ]
+                },
+                "text",
+                "+0-000-000-0000"
+              ]
+            ]
+          ]
+        },
+        {
+          "events": [
+            {
+              "eventAction": "last changed",
+              "eventDate": "2026-02-03T10:33:23-05:00"
+            },
+            {
+              "eventAction": "registration",
+              "eventDate": "2021-07-21T12:07:13-04:00"
+            }
+          ],
+          "handle": "CDNET-ARIN",
+          "links": [
+            {
+              "href": "https://rdap.arin.net/registry/entity/CDNET-ARIN",
+              "rel": "self",
+              "type": "application/rdap+json",
+              "value": "https://rdap.arin.net/registry/autnum/2906"
+            },
+            {
+              "href": "https://whois.arin.net/rest/poc/CDNET-ARIN",
+              "rel": "alternate",
+              "type": "application/xml",
+              "value": "https://rdap.arin.net/registry/autnum/2906"
+            }
+          ],
+          "objectClassName": "entity",
+          "port43": "whois.arin.net",
+          "roles": [
+            "administrative"
+          ],
+          "status": [
+            "validated"
+          ],
+          "vcardArray": [
+            "vcard",
+            [
+              [
+                "version",
+                {},
+                "text",
+                "4.0"
+              ],
+              [
+                "adr",
+                {
+                  "label": "121 Albright Way\nLos Gatos\nCA\n95032\nUnited States"
+                },
+                "text",
+                [
+                  "",
+                  "",
+                  "REDACTED",
+                  "",
+                  "",
+                  "",
+                  ""
+                ]
+              ],
+              [
+                "fn",
+                {},
+                "text",
+                "cdnetops"
+              ],
+              [
+                "org",
+                {},
+                "text",
+                "Netflix"
+              ],
+              [
+                "kind",
+                {},
+                "text",
+                "group"
+              ],
+              [
+                "email",
+                {},
+                "text",
+                "redacted@example.invalid"
+              ],
+              [
+                "tel",
+                {
+                  "type": [
+                    "work",
+                    "voice"
+                  ]
+                },
+                "text",
+                "+0-000-000-0000"
+              ]
+            ]
+          ]
+        }
+      ],
+      "events": [
+        {
+          "eventAction": "last changed",
+          "eventDate": "2021-07-21T12:12:54-04:00"
+        },
+        {
+          "eventAction": "registration",
+          "eventDate": "2012-04-20T11:48:53-04:00"
+        }
+      ],
+      "handle": "SS-144",
+      "links": [
+        {
+          "href": "https://rdap.arin.net/registry/entity/SS-144",
+          "rel": "self",
+          "type": "application/rdap+json",
+          "value": "https://rdap.arin.net/registry/autnum/2906"
+        },
+        {
+          "href": "https://whois.arin.net/rest/org/SS-144",
+          "rel": "alternate",
+          "type": "application/xml",
+          "value": "https://rdap.arin.net/registry/autnum/2906"
+        }
+      ],
+      "objectClassName": "entity",
+      "port43": "whois.arin.net",
+      "roles": [
+        "registrant"
+      ],
+      "vcardArray": [
+        "vcard",
+        [
+          [
+            "version",
+            {},
+            "text",
+            "4.0"
+          ],
+          [
+            "fn",
+            {},
+            "text",
+            "Netflix Streaming Services Inc."
+          ],
+          [
+            "adr",
+            {
+              "label": "1209 Orange Street\nWilmington\nDE\n19801\nUnited States"
+            },
+            "text",
+            [
+              "",
+              "",
+              "REDACTED",
+              "",
+              "",
+              "",
+              ""
+            ]
+          ],
+          [
+            "kind",
+            {},
+            "text",
+            "org"
+          ]
+        ]
+      ]
+    }
+  ],
+  "events": [
+    {
+      "eventAction": "last changed",
+      "eventDate": "2012-08-02T13:41:42-04:00"
+    },
+    {
+      "eventAction": "registration",
+      "eventDate": "2009-09-02T13:54:32-04:00"
+    }
+  ],
+  "handle": "AS2906",
+  "links": [
+    {
+      "href": "https://rdap.arin.net/registry/autnum/2906",
+      "rel": "self",
+      "type": "application/rdap+json",
+      "value": "https://rdap.arin.net/registry/autnum/2906"
+    },
+    {
+      "href": "https://whois.arin.net/rest/asn/AS2906",
+      "rel": "alternate",
+      "type": "application/xml",
+      "value": "https://rdap.arin.net/registry/autnum/2906"
+    }
+  ],
+  "name": "AS-SSI",
+  "notices": [
+    {
+      "description": [
+        "By using the ARIN RDAP/Whois service, you are agreeing to the RDAP/Whois Terms of Use"
+      ],
+      "links": [
+        {
+          "href": "https://www.arin.net/resources/registry/whois/tou/",
+          "rel": "terms-of-service",
+          "type": "text/html",
+          "value": "https://rdap.arin.net/registry/autnum/2906"
+        }
+      ],
+      "title": "Terms of Service"
+    },
+    {
+      "description": [
+        "If you see inaccuracies in the results, please visit: "
+      ],
+      "links": [
+        {
+          "href": "https://www.arin.net/resources/registry/whois/inaccuracy_reporting/",
+          "rel": "inaccuracy-report",
+          "type": "text/html",
+          "value": "https://rdap.arin.net/registry/autnum/2906"
+        }
+      ],
+      "title": "Whois Inaccuracy Reporting"
+    },
+    {
+      "description": [
+        "Copyright 1997-2026, American Registry for Internet Numbers, Ltd."
+      ],
+      "title": "Copyright Notice"
+    }
+  ],
+  "objectClassName": "autnum",
+  "port43": "whois.arin.net",
+  "rdapConformance": [
+    "nro_rdap_profile_0",
+    "rdap_level_0",
+    "nro_rdap_profile_asn_flat_0"
+  ],
+  "startAutnum": 2906,
+  "status": [
+    "active"
+  ]
+}
