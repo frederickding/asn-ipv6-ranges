@@ -5,3 +5,32 @@ include:
   - component: $CI_SERVER_FQDN/components/go/build@1.1.1
     inputs:
       go_image: golang:1.24
+
+variables:
+  IMAGE_NAME: "$CI_REGISTRY_IMAGE"
+
+stages:
+  - build
+  - test
+  - package
+
+build-docker-image:
+  stage: package
+  image: registry.access.redhat.com/ubi10/podman
+  tags:
+    - podman
+  before_script:
+    - rm /var/lib/containers/storage/* -fr
+  script:
+    - test $CI_COMMIT_BRANCH = "$CI_DEFAULT_BRANCH" || export IMAGE_NAME="$IMAGE_NAME/$CI_COMMIT_BRANCH"
+    - echo "$IMAGE_NAME"
+    - podman build -t "$IMAGE_NAME" .
+    - export VERSION_TAG=$(date -u '+%Y%m%d')-$NGINX_VERSION-$(echo $CI_COMMIT_SHA | head -c7)
+    - podman tag "$IMAGE_NAME" "$IMAGE_NAME:$VERSION_TAG"
+    - podman login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" $CI_REGISTRY
+    - podman push "$IMAGE_NAME:$VERSION_TAG"
+    - podman rmi "$IMAGE_NAME:$VERSION_TAG"
+  rules:
+    - if: '$CI_SERVER_HOST == "gitlab.fjd.io" && $CI_PIPELINE_SOURCE == "push"'
+    - if: $CI_COMMIT_TAG
+    - when: manual
