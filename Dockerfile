@@ -6,6 +6,7 @@ RUN apk add --no-cache ca-certificates
 WORKDIR /src
 COPY go.mod ./
 COPY *.go ./
+COPY internal/ ./internal/
 
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/asn-ipv6-ranges .
 

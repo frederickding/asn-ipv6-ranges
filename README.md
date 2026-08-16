@@ -212,6 +212,28 @@ needs no network access to IANA. Refresh it when the registry changes:
 go generate ./...
 ```
 
+## Project layout
+
+Each upstream data source is isolated in its own package, so the network code
+for one cannot entangle with the other. Everything still compiles to a single
+binary — `internal/` packages are linked in, not separate services.
+
+```
+main.go                        server wiring and graceful shutdown
+handler.go                     HTTP handler, parameter parsing, output rendering
+cache.go                       5-minute caches and the test seams
+asn.go                         ASN parsing and IANA range validation
+prefixes.go                    route6 extraction, sorting, aggregation
+asn_ranges_gen.go              generated IANA allocation table
+gen_asn_ranges.go              generator (build-time only, //go:build ignore)
+internal/radb/                 RADB WHOIS client (raw TCP, port 43)
+internal/whoisfreaks/          WhoisFreaks organization lookup (HTTPS)
+```
+
+The two client packages expose narrow APIs — `radb.Query(asn)` and
+`whoisfreaks.LookupOrgName(asn, apiKey)` — and the main package reaches them
+through overridable variables, so tests substitute both without a network.
+
 ## Build and run
 
 ```bash
