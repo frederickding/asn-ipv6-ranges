@@ -35,6 +35,8 @@ func listenAddr() string {
 func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/as/", asHandler)
+	// Exact path, no trailing slash: only /-/status matches.
+	mux.HandleFunc(statusPath, statusHandler)
 
 	srv := &http.Server{
 		Addr:              listenAddr(),

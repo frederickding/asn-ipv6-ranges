@@ -10,7 +10,14 @@ Prefix data comes from the [RADB](https://www.radb.net/) Internet Routing
 Registry, queried over the raw WHOIS protocol (TCP port 43) using native Go
 networking — the service never shells out to a `whois` binary.
 
-## Endpoint
+## Endpoints
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /as/{asn}` | IPv6 prefixes for an ASN |
+| `GET /-/status` | Health check for probes and monitoring |
+
+## `GET /as/{asn}`
 
 ```
 GET /as/{asn}
@@ -271,6 +278,54 @@ which is what makes those ASNs return `400`.
 
 The result is written to `internal/asnreg/ranges_gen.go`, which is committed.
 
+## `GET /-/status` — health check
+
+Returns `200` with `ok` on the first line while the process is serving:
+
+```bash
+curl http://localhost:8080/-/status
+```
+
+```
+ok
+# uptime: 38s
+# prefix cache: 1 ASNs
+# org cache: 0 entries
+```
+
+Probes only need the status code; the `#` lines are detail for a human reading
+the endpoint directly. The response carries `Cache-Control: no-store` so no
+intermediary answers a probe from cache. `GET` and `HEAD` are accepted, anything
+else returns `405`. The path is matched exactly — `/-/status/anything` is `404`.
+
+**It performs no upstream I/O**, and that is deliberate. Probing RADB, a RIR, or
+the WhoisFreaks API here would tie pod health to third parties: an outage at any
+of them would fail the probe and make Kubernetes restart or depool pods that are
+working fine. The service still answers from cache and returns useful errors
+while an upstream is down, so the probe measures what it should — the process is
+up and its listener is accepting requests. Typical response time is well under a
+millisecond.
+
+The same endpoint suits both probe types, since the service holds no startup
+state that would make it live but not yet ready:
+
+```yaml
+livenessProbe:
+  httpGet:
+    path: /-/status
+    port: 8080
+  initialDelaySeconds: 3
+  periodSeconds: 10
+readinessProbe:
+  httpGet:
+    path: /-/status
+    port: 8080
+  periodSeconds: 5
+```
+
+To alert on upstream failures — which this endpoint intentionally ignores —
+monitor the `502` rate on `/as/{asn}` instead.
+
 ## Configuration
 
 | Variable | Default | Purpose |
@@ -297,12 +352,18 @@ trigger an upstream query; requests are not coalesced.
 
 ## Responses
 
+For `/as/{asn}`:
+
 | Status | Meaning |
 | --- | --- |
 | `200` | Success. A valid ASN with no IPv6 prefixes returns `200` with `# no IPv6 prefixes found`. |
 | `400` | Malformed ASN, an ASN outside a permitted range, or an invalid parameter value. |
+| `404` | Unknown path — neither `/as/{asn}` nor `/-/status`. |
 | `405` | Method other than `GET` or `HEAD`. |
 | `502` | The upstream WHOIS query failed. |
+
+An org lookup failure is **not** in this table: it reports the reason in a
+comment and still returns `200`, because the prefix list is the primary output.
 
 Errors are plaintext comment lines, so output stays valid for a consumer that
 ignores `#` lines:
@@ -351,7 +412,8 @@ binary — `internal/` packages are linked in, not separate services.
 
 ```
 main.go                        server wiring and graceful shutdown
-handler.go                     HTTP handler, parameter parsing, output rendering
+handler.go                     /as/{asn} handler, parameter parsing, output rendering
+health.go                      /-/status health check
 cache.go                       5-minute caches, org source resolution, test seams
 asn.go                         ASN parsing and validation
 prefixes.go                    route6 extraction, sorting, aggregation
