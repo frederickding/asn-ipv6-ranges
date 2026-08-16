@@ -1,0 +1,6 @@
+# Compiled binary (matches the module name)
+/asn-ipv6-ranges
+
+# Test and coverage output
+*.test
+*.out
