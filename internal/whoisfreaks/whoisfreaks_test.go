@@ -1,6 +1,7 @@
 package whoisfreaks
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -45,7 +46,7 @@ func TestLookupOrgName(t *testing.T) {
 		defer srv.Close()
 		defer swapAPIURL(t, srv.URL)()
 
-		got, err := LookupOrgName("2906", key)
+		got, err := LookupOrgName(context.Background(), "2906", key)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -64,7 +65,7 @@ func TestLookupOrgName(t *testing.T) {
 		defer srv.Close()
 		defer swapAPIURL(t, srv.URL)()
 
-		got, err := LookupOrgName("56554", key)
+		got, err := LookupOrgName(context.Background(), "56554", key)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -81,7 +82,7 @@ func TestLookupOrgName(t *testing.T) {
 		defer srv.Close()
 		defer swapAPIURL(t, srv.URL)()
 
-		_, err := LookupOrgName("2906", key)
+		_, err := LookupOrgName(context.Background(), "2906", key)
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -98,7 +99,7 @@ func TestLookupOrgName(t *testing.T) {
 		srv.Close() // refuse connections
 		defer swapAPIURL(t, srv.URL)()
 
-		_, err := LookupOrgName("2906", key)
+		_, err := LookupOrgName(context.Background(), "2906", key)
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -114,7 +115,7 @@ func TestLookupOrgName(t *testing.T) {
 		defer srv.Close()
 		defer swapAPIURL(t, srv.URL)()
 
-		if _, err := LookupOrgName("2906", key); err == nil {
+		if _, err := LookupOrgName(context.Background(), "2906", key); err == nil {
 			t.Error("expected error for missing name")
 		}
 	})

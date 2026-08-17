@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"net/netip"
 	"slices"
@@ -59,22 +60,27 @@ func aggregateStrings(input string) []string {
 // sources and the env reader default to failing loudly, so any test that
 // reaches them without opting in is caught rather than hitting the live paid
 // API or a real RIR whois server.
+//
+// query takes no context: almost every test cares only about what the upstream
+// returns, and threading a context through each stub would add noise to all of
+// them for the benefit of the two that exercise cancellation. Those two assign
+// whoisQuery directly.
 func swapTestHooks(t *testing.T, clock *time.Time, query func(string) (string, error)) {
 	t.Helper()
 	origQuery, origAPI, origRIR, origRDAP := whoisQuery, orgAPILookup, orgRIRLookup, orgRDAPLookup
 	origNow, origGetenv := nowFunc, getenv
 
-	whoisQuery = query
+	whoisQuery = func(_ context.Context, asn string) (string, error) { return query(asn) }
 	nowFunc = func() time.Time { return *clock }
-	orgAPILookup = func(string, string) (string, error) {
+	orgAPILookup = func(context.Context, string, string) (string, error) {
 		t.Error("WhoisFreaks API called without an explicit test hook")
 		return "", errors.New("unexpected API lookup")
 	}
-	orgRIRLookup = func(asnreg.Registry, string) (string, error) {
+	orgRIRLookup = func(context.Context, asnreg.Registry, string) (string, error) {
 		t.Error("RIR whois called without an explicit test hook")
 		return "", errors.New("unexpected RIR lookup")
 	}
-	orgRDAPLookup = func(asnreg.Registry, string) (string, error) {
+	orgRDAPLookup = func(context.Context, asnreg.Registry, string) (string, error) {
 		t.Error("RIR RDAP called without an explicit test hook")
 		return "", errors.New("unexpected RDAP lookup")
 	}
@@ -90,10 +96,32 @@ func swapTestHooks(t *testing.T, clock *time.Time, query func(string) (string, e
 	}
 	resetCaches()
 
+	// Budgets are process-wide and keep a real clock, so a test's frozen clock
+	// cannot refill them. Tests that are not about rate limiting get an
+	// effectively unlimited budget; swapUpstreamBudget sets a real one.
+	origBudgetFor := budgetFor
+	budgetFor = func(string) budget { return unlimitedBudget }
+	resetLimiters()
+
 	t.Cleanup(func() {
 		whoisQuery, orgAPILookup, orgRIRLookup, orgRDAPLookup = origQuery, origAPI, origRIR, origRDAP
 		nowFunc, getenv = origNow, origGetenv
+		budgetFor = origBudgetFor
 		resetCaches()
+		resetLimiters()
+	})
+}
+
+// swapUpstreamBudget gives every upstream the same budget for one test, so a
+// test can exercise what happens when one is spent.
+func swapUpstreamBudget(t *testing.T, b budget) {
+	t.Helper()
+	orig := budgetFor
+	budgetFor = func(string) budget { return b }
+	resetLimiters()
+	t.Cleanup(func() {
+		budgetFor = orig
+		resetLimiters()
 	})
 }
 

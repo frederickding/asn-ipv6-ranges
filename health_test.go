@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -58,7 +59,7 @@ func TestStatusHandlerIndependentOfUpstreams(t *testing.T) {
 		return "", errors.New("radb is down")
 	})
 	getenv = func(string) string { return "secret-key" }
-	orgAPILookup = func(string, string) (string, error) { return "", errors.New("api is down") }
+	orgAPILookup = func(context.Context, string, string) (string, error) { return "", errors.New("api is down") }
 
 	// Confirm the service really is degraded right now.
 	asRec := httptest.NewRecorder()

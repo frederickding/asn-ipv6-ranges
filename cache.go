@@ -13,6 +13,7 @@ import (
 
 	"asn-ipv6-ranges/internal/asnreg"
 	"asn-ipv6-ranges/internal/radb"
+	"asn-ipv6-ranges/internal/ratelimit"
 	"asn-ipv6-ranges/internal/rdap"
 	"asn-ipv6-ranges/internal/rirwhois"
 	"asn-ipv6-ranges/internal/whoisfreaks"
@@ -29,10 +30,15 @@ import (
 //   - cacheMaxEntries is capacity, the hard bound on memory. Without it the
 //     maps grew with the number of distinct ASNs ever queried, so a scan of the
 //     ASN space was an unbounded allocation.
+//   - failureTTL is how long a failed lookup is remembered. Without it, an ASN
+//     whose upstream answer is broken — or an ASN chosen precisely because it
+//     fails — is re-queried on every single request, so inbound rate becomes
+//     upstream rate with the cache contributing nothing.
 const (
 	cacheTTL        = 5 * time.Minute
 	cacheMaxAge     = time.Hour
 	cacheMaxEntries = 256
+	failureTTL      = 30 * time.Second
 )
 
 // Org sources, as selected by the src request parameter.
@@ -56,9 +62,123 @@ var (
 	getenv        = os.Getenv
 )
 
+// budgetError reports that an upstream's query budget is spent. It carries the
+// host so the handler can advertise a Retry-After specific to that budget, and
+// unwraps to ratelimit.ErrLimited so callers can test for the condition without
+// knowing about this type.
+type budgetError struct{ host string }
+
+// The host is deliberately absent from the message: callers that report an
+// upstream failure already prefix it with the host they were querying.
+func (e *budgetError) Error() string {
+	return "query budget for this upstream is exhausted, not querying it"
+}
+
+func (e *budgetError) Unwrap() error { return ratelimit.ErrLimited }
+
+// call is one in-flight upstream lookup. Every request that asks for the same
+// thing while it runs waits on it instead of starting its own.
+type call[T any] struct {
+	done chan struct{}
+	val  T
+	err  error
+}
+
+// group coalesces concurrent lookups for the same key into one.
+//
+// This is what makes the upstream budgets hold. Without it, the cache only
+// helps requests that arrive after an answer is stored, so a burst of K
+// concurrent requests for one uncached ASN is K identical upstream queries —
+// and pointing a bot at one ASN was enough to generate unbounded upstream load.
+// With it, that burst costs exactly one query and the other K-1 requests wait
+// for its result.
+type group[K comparable, T any] struct {
+	mu sync.Mutex
+	m  map[K]*call[T]
+}
+
+// do runs fn for key, or waits for the in-flight call that is already doing so.
+//
+// A waiter that gives up (its own context is cancelled) leaves the leader
+// running: the leader has its own deadline, and abandoning a query mid-flight
+// would waste the upstream request that everyone else is still waiting for.
+//
+// The converse costs a little accuracy: if the leader's own request is
+// cancelled, its waiters see that cancellation rather than an answer. They are
+// no worse off than if they had queried alone and been refused, and nothing is
+// cached, so the next request gets a real lookup.
+func (g *group[K, T]) do(ctx context.Context, key K, fn func() (T, error)) (T, error) {
+	g.mu.Lock()
+	if g.m == nil {
+		g.m = make(map[K]*call[T])
+	}
+	if c, ok := g.m[key]; ok {
+		g.mu.Unlock()
+		select {
+		case <-c.done:
+			return c.val, c.err
+		case <-ctx.Done():
+			var zero T
+			return zero, ctx.Err()
+		}
+	}
+	c := &call[T]{done: make(chan struct{})}
+	g.m[key] = c
+	g.mu.Unlock()
+
+	// Deleted before the waiters are released so a request arriving after this
+	// call finishes starts a fresh one rather than joining a completed call.
+	c.val, c.err = fn()
+	g.mu.Lock()
+	delete(g.m, key)
+	g.mu.Unlock()
+	close(c.done)
+
+	return c.val, c.err
+}
+
+var (
+	prefixGroup group[string, cacheEntry]
+	orgGroup    group[orgCacheKey, orgCacheEntry]
+)
+
+// cacheable reports whether a failure is worth remembering.
+//
+// Only the upstream's own answers are. A cancelled request says nothing about
+// the ASN, and a refusal from our own rate limiter is already backed off by the
+// limiter itself — caching either would deny a later, legitimate request an
+// answer it could have had.
+func cacheable(ctx context.Context, err error) bool {
+	if err == nil {
+		return true
+	}
+	if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	return !errors.Is(err, ratelimit.ErrLimited)
+}
+
+// cacheEntry holds either a result or the failure that replaced it. Failures
+// are cached too, for the shorter failureTTL — see getPrefixes.
 type cacheEntry struct {
 	prefixes  []netip.Prefix
+	err       error
 	queriedAt time.Time
+}
+
+// fresh reports whether an entry may still be served. Failures expire sooner
+// than results: they are cached to stop repeat upstream queries, not because
+// they are worth keeping.
+func (e cacheEntry) fresh(now time.Time) bool {
+	return isFresh(e.queriedAt, e.err, now)
+}
+
+func isFresh(at time.Time, err error, now time.Time) bool {
+	ttl := cacheTTL
+	if err != nil {
+		ttl = failureTTL
+	}
+	return now.Sub(at) < ttl
 }
 
 // orgResult is an organization name plus the host that supplied it, so the
@@ -78,7 +198,12 @@ type orgCacheKey struct {
 
 type orgCacheEntry struct {
 	result    orgResult
+	err       error
 	fetchedAt time.Time
+}
+
+func (e orgCacheEntry) fresh(now time.Time) bool {
+	return isFresh(e.fetchedAt, e.err, now)
 }
 
 var (
@@ -177,56 +302,101 @@ func startCacheReaper(ctx context.Context) {
 	}()
 }
 
-// getPrefixes returns an ASN's prefixes plus the time of the upstream query
-// that produced them. Failures are not cached, so a transient outage does not
-// lock out retries for the whole TTL.
-func getPrefixes(asn string) ([]netip.Prefix, time.Time, error) {
+// lookupPrefixCache returns a cached entry if one is still fresh.
+func lookupPrefixCache(asn string) (cacheEntry, bool) {
 	cacheMu.RLock()
 	entry, ok := cache[asn]
 	cacheMu.RUnlock()
-	if ok && nowFunc().Sub(entry.queriedAt) < cacheTTL {
-		return entry.prefixes, entry.queriedAt, nil
+	return entry, ok && entry.fresh(nowFunc())
+}
+
+// getPrefixes returns an ASN's prefixes plus the time of the upstream query
+// that produced them.
+//
+// Three things bound the upstream load this can generate, and all three are
+// needed: the cache serves repeats, the group coalesces concurrent misses into
+// one query, and the budget refuses the query outright when RADB's allowance is
+// spent. A failure is cached for failureTTL rather than not at all — the old
+// behaviour let one unanswerable ASN be replayed into unlimited upstream
+// traffic — but only when it came from RADB itself, per cacheable.
+func getPrefixes(ctx context.Context, asn string) ([]netip.Prefix, time.Time, error) {
+	if entry, ok := lookupPrefixCache(asn); ok {
+		return entry.prefixes, entry.queriedAt, entry.err
 	}
 
-	output, err := whoisQuery(asn)
+	entry, err := prefixGroup.do(ctx, asn, func() (cacheEntry, error) {
+		// Re-checked inside the group: this call may have been queued behind
+		// one that has just stored an answer.
+		if entry, ok := lookupPrefixCache(asn); ok {
+			return entry, entry.err
+		}
+
+		output, err := withUpstreamBudget(radb.Host, func() (string, error) {
+			return whoisQuery(ctx, asn)
+		})
+		if err != nil && !cacheable(ctx, err) {
+			return cacheEntry{}, err
+		}
+
+		// Cached un-aggregated, so both agg=1 and agg=0 share one upstream query.
+		entry := cacheEntry{queriedAt: nowFunc(), err: err}
+		if err == nil {
+			entry.prefixes = extractIPv6Prefixes(output)
+		}
+
+		cacheMu.Lock()
+		cache[asn] = entry
+		pruneLocked(cache, asn, func(e cacheEntry) time.Time { return e.queriedAt }, entry.queriedAt)
+		cacheMu.Unlock()
+		return entry, err
+	})
 	if err != nil {
 		return nil, time.Time{}, err
 	}
-
-	// Cached un-aggregated, so both agg=1 and agg=0 share one upstream query.
-	prefixes := extractIPv6Prefixes(output)
-	queriedAt := nowFunc()
-	cacheMu.Lock()
-	cache[asn] = cacheEntry{prefixes: prefixes, queriedAt: queriedAt}
-	pruneLocked(cache, asn, func(e cacheEntry) time.Time { return e.queriedAt }, queriedAt)
-	cacheMu.Unlock()
-	return prefixes, queriedAt, nil
+	return entry.prefixes, entry.queriedAt, nil
 }
 
-func getOrgName(asn string, v uint64, src string) (orgResult, error) {
-	key := orgCacheKey{asn: asn, src: src}
-
+func lookupOrgCache(key orgCacheKey) (orgCacheEntry, bool) {
 	orgCacheMu.RLock()
 	entry, ok := orgCache[key]
 	orgCacheMu.RUnlock()
-	if ok && nowFunc().Sub(entry.fetchedAt) < cacheTTL {
-		return entry.result, nil
+	return entry, ok && entry.fresh(nowFunc())
+}
+
+// getOrgName resolves an ASN's organization name, on the same three terms as
+// getPrefixes. It matters more here: an org lookup can reach a registry whose
+// published limit is as low as a hundred queries per five minutes.
+func getOrgName(ctx context.Context, asn string, v uint64, src string) (orgResult, error) {
+	key := orgCacheKey{asn: asn, src: src}
+
+	if entry, ok := lookupOrgCache(key); ok {
+		return entry.result, entry.err
 	}
 
-	result, err := resolveOrgName(asn, v, src)
+	entry, err := orgGroup.do(ctx, key, func() (orgCacheEntry, error) {
+		if entry, ok := lookupOrgCache(key); ok {
+			return entry, entry.err
+		}
+
+		result, err := resolveOrgName(ctx, asn, v, src)
+		if err != nil && !cacheable(ctx, err) {
+			return orgCacheEntry{}, err
+		}
+
+		entry := orgCacheEntry{result: result, err: err, fetchedAt: nowFunc()}
+		orgCacheMu.Lock()
+		orgCache[key] = entry
+		// Bounded on the same terms. Entries here are far smaller than a prefix
+		// list, but an unbounded map is an unbounded map, and this one is keyed
+		// by {asn, src} so a single ASN can occupy up to four slots.
+		pruneLocked(orgCache, key, func(e orgCacheEntry) time.Time { return e.fetchedAt }, entry.fetchedAt)
+		orgCacheMu.Unlock()
+		return entry, err
+	})
 	if err != nil {
 		return orgResult{}, err
 	}
-
-	fetchedAt := nowFunc()
-	orgCacheMu.Lock()
-	orgCache[key] = orgCacheEntry{result: result, fetchedAt: fetchedAt}
-	// Bounded on the same terms. Entries here are far smaller than a prefix
-	// list, but an unbounded map is an unbounded map, and this one is keyed by
-	// {asn, src} so a single ASN can occupy up to four slots.
-	pruneLocked(orgCache, key, func(e orgCacheEntry) time.Time { return e.fetchedAt }, fetchedAt)
-	orgCacheMu.Unlock()
-	return result, nil
+	return entry.result, nil
 }
 
 // preferRDAP reports whether a registry's RDAP endpoint should be tried before
@@ -250,7 +420,7 @@ func preferRDAP(reg asnreg.Registry) bool {
 // then the two registry sources in the order preferRDAP chooses. An explicit
 // src uses only that source and never falls back, so the parameter can be
 // trusted to exercise one path.
-func resolveOrgName(asn string, v uint64, src string) (orgResult, error) {
+func resolveOrgName(ctx context.Context, asn string, v uint64, src string) (orgResult, error) {
 	reg, haveRegistry := asnreg.Lookup(v)
 
 	switch src {
@@ -259,26 +429,26 @@ func resolveOrgName(asn string, v uint64, src string) (orgResult, error) {
 		if apiKey == "" {
 			return orgResult{}, fmt.Errorf("api selected but %s is not set", whoisfreaks.KeyEnv)
 		}
-		return lookupAPI(asn, apiKey)
+		return lookupAPI(ctx, asn, apiKey)
 
 	case srcWHOIS:
 		if !haveRegistry {
 			return orgResult{}, fmt.Errorf("no registry known for AS%s", asn)
 		}
-		return lookupWHOIS(reg, asn)
+		return lookupWHOIS(ctx, reg, asn)
 
 	case srcRDAP:
 		if !haveRegistry {
 			return orgResult{}, fmt.Errorf("no registry known for AS%s", asn)
 		}
-		return lookupRDAP(reg, asn)
+		return lookupRDAP(ctx, reg, asn)
 	}
 
 	// src auto: try each available source in turn, reporting every failure if
 	// none succeeds.
 	var errs []error
 	if apiKey := getenv(whoisfreaks.KeyEnv); apiKey != "" {
-		res, err := lookupAPI(asn, apiKey)
+		res, err := lookupAPI(ctx, asn, apiKey)
 		if err == nil {
 			return res, nil
 		}
@@ -292,45 +462,72 @@ func resolveOrgName(asn string, v uint64, src string) (orgResult, error) {
 		return orgResult{}, errors.Join(errs...)
 	}
 
-	registryLookups := []func(asnreg.Registry, string) (orgResult, error){lookupWHOIS, lookupRDAP}
+	registryLookups := []func(context.Context, asnreg.Registry, string) (orgResult, error){lookupWHOIS, lookupRDAP}
 	if preferRDAP(reg) {
-		registryLookups = []func(asnreg.Registry, string) (orgResult, error){lookupRDAP, lookupWHOIS}
+		registryLookups = []func(context.Context, asnreg.Registry, string) (orgResult, error){lookupRDAP, lookupWHOIS}
 	}
 	for _, lookup := range registryLookups {
-		res, err := lookup(reg, asn)
+		res, err := lookup(ctx, reg, asn)
 		if err == nil {
 			return res, nil
 		}
 		errs = append(errs, err)
+		// A budget refusal is not a reason to try the next source: the fallback
+		// would spend another registry's budget answering a request the first
+		// one already declined, turning one shed query into two.
+		if errors.Is(err, ratelimit.ErrLimited) {
+			break
+		}
 	}
 	return orgResult{}, errors.Join(errs...)
 }
 
-func lookupAPI(asn, apiKey string) (orgResult, error) {
-	name, err := orgAPILookup(asn, apiKey)
+func lookupAPI(ctx context.Context, asn, apiKey string) (orgResult, error) {
+	name, err := withUpstreamBudget(whoisfreaks.Host, func() (string, error) {
+		return orgAPILookup(ctx, asn, apiKey)
+	})
 	if err != nil {
 		return orgResult{}, fmt.Errorf("%s: %w", whoisfreaks.Host, err)
 	}
 	return orgResult{name: name, source: whoisfreaks.Host}, nil
 }
 
-func lookupWHOIS(reg asnreg.Registry, asn string) (orgResult, error) {
-	name, err := orgRIRLookup(reg, asn)
+// lookupWHOIS spends one token per lookup even though rirwhois may issue a
+// follow-up query to resolve an org: handle. The budgets are sized with that
+// second query in mind, and the concurrency slot — which is what RIPE's AUP
+// actually limits — is held across both.
+func lookupWHOIS(ctx context.Context, reg asnreg.Registry, asn string) (orgResult, error) {
+	name, err := withUpstreamBudget(reg.WHOISHost, func() (string, error) {
+		return orgRIRLookup(ctx, reg, asn)
+	})
 	if err != nil {
 		return orgResult{}, fmt.Errorf("%s: %w", reg.WHOISHost, err)
 	}
 	return orgResult{name: name, source: reg.WHOISHost}, nil
 }
 
-func lookupRDAP(reg asnreg.Registry, asn string) (orgResult, error) {
+func lookupRDAP(ctx context.Context, reg asnreg.Registry, asn string) (orgResult, error) {
 	if reg.RDAPBase == "" {
 		return orgResult{}, fmt.Errorf("%s: no RDAP endpoint", reg.Name)
 	}
-	name, err := orgRDAPLookup(reg, asn)
+	host := rdapHost(reg)
+	name, err := withUpstreamBudget(host, func() (string, error) {
+		return orgRDAPLookup(ctx, reg, asn)
+	})
 	if err != nil {
-		return orgResult{}, fmt.Errorf("%s: %w", rdapHost(reg), err)
+		// The registry's own verdict on our rate outranks the budget we guessed
+		// for it: park the host until it says we may resume.
+		var limited *rdap.RateLimitedError
+		if errors.As(err, &limited) {
+			retryAfter := limited.RetryAfter
+			if retryAfter <= 0 {
+				retryAfter = defaultUpstreamPause
+			}
+			pauseUpstream(host, nowFunc().Add(retryAfter))
+		}
+		return orgResult{}, fmt.Errorf("%s: %w", host, err)
 	}
-	return orgResult{name: name, source: rdapHost(reg)}, nil
+	return orgResult{name: name, source: host}, nil
 }
 
 // rdapHost is the RDAP base reduced to a hostname, for the source annotation.

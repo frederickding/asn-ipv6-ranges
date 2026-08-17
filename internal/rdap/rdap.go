@@ -8,10 +8,12 @@
 package rdap
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,6 +28,62 @@ const (
 
 // baseOverride, when set, replaces the registry's RDAP base in tests.
 var baseOverride string
+
+// client is shared across lookups rather than built per call.
+//
+// A fresh http.Client per request falls back to http.DefaultTransport, whose
+// MaxIdleConnsPerHost is 2 — so under concurrency most queries pay a full TLS
+// handshake to a registry that is already rate-limiting us on connection count.
+// Reusing one transport keeps connections warm, and MaxConnsPerHost is a
+// transport-level backstop underneath the per-host budget the caller enforces.
+var client = &http.Client{
+	Timeout: timeout,
+	Transport: &http.Transport{
+		MaxIdleConns:        16,
+		MaxIdleConnsPerHost: 4,
+		MaxConnsPerHost:     4,
+		IdleConnTimeout:     90 * time.Second,
+	},
+}
+
+// RateLimitedError reports that a registry refused the query because we are
+// querying too fast. It is distinguished from other failures because the
+// response is actionable: the caller should stop querying this registry, not
+// retry or fall back to another source.
+type RateLimitedError struct {
+	Status int
+	// RetryAfter is the registry's own Retry-After, or zero when it sent none.
+	RetryAfter time.Duration
+}
+
+func (e *RateLimitedError) Error() string {
+	if e.RetryAfter > 0 {
+		return fmt.Sprintf("rdap returned %d, retry after %s", e.Status, e.RetryAfter)
+	}
+	return fmt.Sprintf("rdap returned %d (rate limited)", e.Status)
+}
+
+// parseRetryAfter reads RFC 9110's two Retry-After forms, delay-seconds and
+// HTTP-date. An absent, unparseable, or past value reports zero, leaving the
+// caller to fall back to its own backoff.
+func parseRetryAfter(h string, now time.Time) time.Duration {
+	h = strings.TrimSpace(h)
+	if h == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(h); err == nil {
+		if secs <= 0 {
+			return 0
+		}
+		return time.Duration(secs) * time.Second
+	}
+	if t, err := http.ParseTime(h); err == nil {
+		if d := t.Sub(now); d > 0 {
+			return d
+		}
+	}
+	return 0
+}
 
 // autnumResponse is the subset of RFC 7483 this package needs. Everything else
 // in the response is ignored rather than modelled.
@@ -64,7 +122,7 @@ type remark struct {
 // Administrative and technical entities are never consulted: they carry named
 // individuals, and on APNIC they name the delegating registry rather than the
 // operator.
-func LookupOrgName(reg asnreg.Registry, asn string) (string, error) {
+func LookupOrgName(ctx context.Context, reg asnreg.Registry, asn string) (string, error) {
 	base := reg.RDAPBase
 	if baseOverride != "" {
 		base = baseOverride
@@ -74,22 +132,42 @@ func LookupOrgName(reg asnreg.Registry, asn string) (string, error) {
 	}
 
 	url := strings.TrimSuffix(base, "/") + "/autnum/" + asn
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("Accept", "application/rdap+json")
 
-	client := &http.Client{Timeout: timeout}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
 
+	// Status is checked before the body is read. Every RIR rate-limits RDAP and
+	// none of them publish the threshold, so a 429 is the one signal we get
+	// that we are over it — reading a megabyte of error page first would be
+	// paying for a response that is already known to be useless.
+	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
+		return "", &RateLimitedError{
+			Status:     resp.StatusCode,
+			RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()),
+		}
+	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
 	if err != nil {
 		return "", err
+	}
+
+	// LACNIC — the strictest of the five and the only one to publish its
+	// limits — signals refusal with 403 and a message in the body rather than
+	// the 429 the other registries use. Treating it as an ordinary denial would
+	// keep us querying at exactly the rate it just objected to.
+	if resp.StatusCode == http.StatusForbidden && strings.Contains(strings.ToLower(string(body)), "rate limit") {
+		return "", &RateLimitedError{
+			Status:     resp.StatusCode,
+			RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()),
+		}
 	}
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("rdap returned %d", resp.StatusCode)

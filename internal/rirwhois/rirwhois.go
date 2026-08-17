@@ -8,6 +8,7 @@
 package rirwhois
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -31,12 +32,14 @@ var dialAddr = func(host string) string { return host + ":43" }
 //
 // RIPE-style registries answer with an org: handle rather than a name, so one
 // follow-up query may be issued to resolve it — at most two queries per lookup.
-func LookupOrgName(reg asnreg.Registry, asn string) (string, error) {
+// The context covers both, so a lookup cannot outlive the request that wanted
+// it and cannot spend a second query against a registry nobody is waiting on.
+func LookupOrgName(ctx context.Context, reg asnreg.Registry, asn string) (string, error) {
 	if reg.WHOISHost == "" {
 		return "", fmt.Errorf("no whois host for registry %q", reg.Name)
 	}
 
-	body, err := query(reg.WHOISHost, autNumQuery(reg, asn))
+	body, err := query(ctx, reg.WHOISHost, autNumQuery(reg, asn))
 	if err != nil {
 		return "", err
 	}
@@ -68,7 +71,7 @@ func LookupOrgName(reg asnreg.Registry, asn string) (string, error) {
 
 	// Otherwise resolve the org: handle, which is where RIPE keeps the name.
 	if handle := obj.value("org"); handle != "" {
-		if name, err := resolveOrgHandle(reg, handle); err == nil && name != "" {
+		if name, err := resolveOrgHandle(ctx, reg, handle); err == nil && name != "" {
 			return name, nil
 		}
 		// Fall through to the descriptive attributes below.
@@ -84,8 +87,8 @@ func LookupOrgName(reg asnreg.Registry, asn string) (string, error) {
 	return "", fmt.Errorf("no organization name in %s response", reg.Name)
 }
 
-func resolveOrgHandle(reg asnreg.Registry, handle string) (string, error) {
-	body, err := query(reg.WHOISHost, flagPrefix(reg)+handle)
+func resolveOrgHandle(ctx context.Context, reg asnreg.Registry, handle string) (string, error) {
+	body, err := query(ctx, reg.WHOISHost, flagPrefix(reg)+handle)
 	if err != nil {
 		return "", err
 	}
@@ -117,12 +120,20 @@ func autNumQuery(reg asnreg.Registry, asn string) string {
 	return flagPrefix(reg) + "AS" + asn
 }
 
-func query(host, q string) (string, error) {
-	conn, err := net.DialTimeout("tcp", dialAddr(host), timeout)
+func query(ctx context.Context, host, q string) (string, error) {
+	dialer := net.Dialer{Timeout: timeout}
+	conn, err := dialer.DialContext(ctx, "tcp", dialAddr(host))
 	if err != nil {
 		return "", err
 	}
 	defer conn.Close()
+
+	// Closing the connection is the only way to interrupt an in-progress Read,
+	// so cancellation is wired to a close. Registries cap simultaneous
+	// connections — RIPE's AUP at three — and a connection nobody is waiting on
+	// still occupies one of them.
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
 
 	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
 		return "", err
@@ -132,6 +143,11 @@ func query(host, q string) (string, error) {
 	}
 	body, err := io.ReadAll(io.LimitReader(conn, maxBody))
 	if err != nil {
+		// The close above surfaces as "use of closed network connection",
+		// which would hide the cancellation that actually caused it.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
+		}
 		return "", err
 	}
 	return string(body), nil

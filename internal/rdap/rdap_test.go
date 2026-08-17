@@ -1,7 +1,9 @@
 package rdap
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"asn-ipv6-ranges/internal/asnreg"
 )
@@ -90,7 +93,7 @@ func TestLookupOrgName(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			paths := serveFixture(t, fixture(t, tt.fixture), http.StatusOK)
 
-			got, err := LookupOrgName(tt.reg, tt.asn)
+			got, err := LookupOrgName(context.Background(), tt.reg, tt.asn)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -146,7 +149,7 @@ func TestLookupOrgNameRejectsWrongEntities(t *testing.T) {
 			}
 			serveFixture(t, body, http.StatusOK)
 
-			got, err := LookupOrgName(tt.reg, tt.asn)
+			got, err := LookupOrgName(context.Background(), tt.reg, tt.asn)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -165,28 +168,28 @@ func TestLookupOrgNameErrors(t *testing.T) {
 		baseOverride = ""
 		t.Cleanup(func() { baseOverride = orig })
 
-		if _, err := LookupOrgName(asnreg.Registry{Name: "NOWHERE"}, "1"); err == nil {
+		if _, err := LookupOrgName(context.Background(), asnreg.Registry{Name: "NOWHERE"}, "1"); err == nil {
 			t.Error("expected an error when the registry has no RDAP base")
 		}
 	})
 
 	t.Run("http error status", func(t *testing.T) {
 		serveFixture(t, []byte(`{"errorCode":404}`), http.StatusNotFound)
-		if _, err := LookupOrgName(asnreg.Registry{Name: "ARIN"}, "99999"); err == nil {
+		if _, err := LookupOrgName(context.Background(), asnreg.Registry{Name: "ARIN"}, "99999"); err == nil {
 			t.Error("expected an error for a 404 response")
 		}
 	})
 
 	t.Run("malformed json", func(t *testing.T) {
 		serveFixture(t, []byte(`{not json`), http.StatusOK)
-		if _, err := LookupOrgName(asnreg.Registry{Name: "ARIN"}, "2906"); err == nil {
+		if _, err := LookupOrgName(context.Background(), asnreg.Registry{Name: "ARIN"}, "2906"); err == nil {
 			t.Error("expected an error for a malformed body")
 		}
 	})
 
 	t.Run("no usable name", func(t *testing.T) {
 		serveFixture(t, []byte(`{"objectClassName":"autnum","entities":[]}`), http.StatusOK)
-		if _, err := LookupOrgName(asnreg.Registry{Name: "ARIN"}, "2906"); err == nil {
+		if _, err := LookupOrgName(context.Background(), asnreg.Registry{Name: "ARIN"}, "2906"); err == nil {
 			t.Error("expected an error when no name is present")
 		}
 	})
@@ -249,5 +252,144 @@ func TestFixturesCarryNoPersonalData(t *testing.T) {
 				t.Errorf("%s: unredacted personal name %q", f, name)
 			}
 		}
+	}
+}
+
+// serveStatus starts a stub RDAP server with control over the response headers,
+// for the rate-limiting cases.
+func serveStatus(t *testing.T, status int, body string, headers map[string]string) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for k, v := range headers {
+			w.Header().Set(k, v)
+		}
+		w.WriteHeader(status)
+		w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+
+	orig := baseOverride
+	baseOverride = srv.URL
+	t.Cleanup(func() { baseOverride = orig })
+}
+
+// TestLookupOrgNameReportsRateLimiting covers the one signal the registries give
+// us about limits none of them publish. A 429 has to be distinguishable from an
+// ordinary failure, or the caller keeps querying at exactly the rate that
+// provoked it.
+func TestLookupOrgNameReportsRateLimiting(t *testing.T) {
+	tests := []struct {
+		name       string
+		status     int
+		body       string
+		headers    map[string]string
+		retryAfter time.Duration
+	}{
+		{
+			name: "429 with delay-seconds", status: http.StatusTooManyRequests,
+			headers: map[string]string{"Retry-After": "120"}, retryAfter: 2 * time.Minute,
+		},
+		{
+			name: "429 without Retry-After", status: http.StatusTooManyRequests,
+		},
+		{
+			name: "503 is treated the same", status: http.StatusServiceUnavailable,
+			headers: map[string]string{"Retry-After": "30"}, retryAfter: 30 * time.Second,
+		},
+		{
+			// LACNIC signals refusal this way rather than with a 429.
+			name: "403 naming a rate limit", status: http.StatusForbidden,
+			body: `{"errorCode":403,"title":"rate limit exceeded for IP: 192.0.2.1"}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			serveStatus(t, tc.status, tc.body, tc.headers)
+
+			_, err := LookupOrgName(context.Background(), asnreg.Registry{Name: "ARIN"}, "2906")
+			var limited *RateLimitedError
+			if !errors.As(err, &limited) {
+				t.Fatalf("got %v (%T), want a *RateLimitedError", err, err)
+			}
+			if limited.Status != tc.status {
+				t.Errorf("Status = %d, want %d", limited.Status, tc.status)
+			}
+			if limited.RetryAfter != tc.retryAfter {
+				t.Errorf("RetryAfter = %s, want %s", limited.RetryAfter, tc.retryAfter)
+			}
+		})
+	}
+}
+
+// TestLookupOrgNameKeepsOrdinaryDenialsOrdinary: a 403 that is not about rate
+// limiting must not park the registry.
+func TestLookupOrgNameKeepsOrdinaryDenialsOrdinary(t *testing.T) {
+	serveStatus(t, http.StatusForbidden, `{"errorCode":403,"title":"access denied"}`, nil)
+
+	_, err := LookupOrgName(context.Background(), asnreg.Registry{Name: "ARIN"}, "2906")
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if errors.As(err, new(*RateLimitedError)) {
+		t.Errorf("a plain 403 was misread as rate limiting: %v", err)
+	}
+}
+
+func TestParseRetryAfter(t *testing.T) {
+	base := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name   string
+		header string
+		want   time.Duration
+	}{
+		{"absent", "", 0},
+		{"delay seconds", "45", 45 * time.Second},
+		{"zero means no useful hint", "0", 0},
+		{"negative is ignored", "-5", 0},
+		{"http date in the future", base.Add(90 * time.Second).Format(http.TimeFormat), 90 * time.Second},
+		{"http date in the past", base.Add(-time.Hour).Format(http.TimeFormat), 0},
+		{"unparseable", "soon", 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := parseRetryAfter(tc.header, base); got != tc.want {
+				t.Errorf("parseRetryAfter(%q) = %s, want %s", tc.header, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestLookupOrgNameHonoursCancellation: an abandoned request must not leave a
+// query running against a registry that counts it.
+func TestLookupOrgNameHonoursCancellation(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	t.Cleanup(srv.Close)
+
+	orig := baseOverride
+	baseOverride = srv.URL
+	t.Cleanup(func() { baseOverride = orig })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := LookupOrgName(ctx, asnreg.Registry{Name: "ARIN"}, "2906")
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("got %v, want context.Canceled", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("lookup outlived its cancelled context")
 	}
 }

@@ -66,6 +66,17 @@ spec:
             # the limit as headroom for allocations the GC cannot defer.
             - name: GOMEMLIMIT
               value: "80MiB"
+            # Concurrent requests this pod will hold; past it, requests are
+            # answered 503 with Retry-After rather than queued. This is the
+            # hard bound on memory, because a request's cost is dominated by
+            # the upstream response it holds (capped at 8Mi by radb.maxBody).
+            # Raise it and limits.memory together, never alone.
+            #
+            # It is per pod, as are the per-registry outbound query budgets in
+            # upstream.go: with replicas: 2, a registry sees twice what one pod
+            # is allowed. See doc/networking.md.
+            - name: MAX_INFLIGHT
+              value: "32"
             # Optional. Absent or empty, ?org=1 falls back to RIR WHOIS/RDAP
             # and says so in a # comment. optional: true means the pod still
             # starts when the Secret does not exist, so the key stays out of
@@ -133,11 +144,12 @@ spec:
               #
               #   256 entries x 2000 prefixes each  51Mi   (no real ASN is
               #                                             anywhere near this)
-              #   64 concurrent large-ASN requests  29Mi
+              #   32 concurrent large-ASN requests  15Mi
               #   idle                               8Mi
               #
               # A single upstream response is separately capped at 8Mi by
-              # radb.maxBody, so concurrency cannot spike without bound.
+              # radb.maxBody, and MAX_INFLIGHT caps how many of those the pod
+              # holds at once, so concurrency cannot spike without bound.
               memory: 96Mi
           securityContext:
             allowPrivilegeEscalation: false
