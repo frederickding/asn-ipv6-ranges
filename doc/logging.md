@@ -98,12 +98,17 @@ Implemented in `stats.go`.
 On stderr, via Go's standard logger:
 
 ```
-2026/08/17 00:59:21 listening on :8080
+2026/08/17 00:59:21 asn-ipv6-ranges v1.1.0 listening on :8080
 2026/08/17 01:01:23 shutting down
 2026/08/17 01:04:00 cache sweep removed 12 expired entries
 2026/08/17 01:07:14 upstream rdap.lacnic.net rate-limited us, pausing queries until 2026-08-17T01:12:14Z
 ```
 
-The last of those is worth alerting on: it means a registry refused a query
+The startup line carries the build, so a log stream alone is enough to tell
+which version was serving at any point — useful for pinning a behaviour change
+to a rollout. An unstamped local build reports `dev-<short sha>` there instead.
+The same string is served by `/-/version`; see [version.md](version.md).
+
+The rate-limit line is worth alerting on: it means a registry refused a query
 because we were going too fast, and that source is parked until its `Retry-After`
 elapses. See [networking.md](networking.md) for the budgets meant to prevent it.

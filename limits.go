@@ -62,7 +62,9 @@ func initLimits() {
 //
 // The health endpoint is exempt: shedding a readiness probe under load would
 // depool a pod that is working exactly as designed, converting overload into an
-// outage.
+// outage. Only that one path — versionPath shares the /-/ prefix but nothing
+// polls it on an interval, so it is ordinary traffic and stays under the cap
+// rather than becoming an unauthenticated way past it.
 func withInflightLimit(next http.Handler) http.Handler {
 	slots := make(chan struct{}, maxInflight)
 

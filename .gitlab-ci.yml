@@ -24,8 +24,11 @@ build-docker-image: &build-docker
   script:
     - test $CI_COMMIT_BRANCH = "$CI_DEFAULT_BRANCH" || export IMAGE_NAME="$IMAGE_NAME/$CI_COMMIT_BRANCH"
     - echo "$IMAGE_NAME"
-    - podman build -t "$IMAGE_NAME" .
+    # Computed before the build, not after: VERSION_TAG is both the image tag
+    # and the version stamped into the binary, so /-/version names the exact
+    # image to pull.
     - export VERSION_TAG=$(date -u '+%Y%m%d')-$(echo $CI_COMMIT_SHA | head -c7)
+    - podman build --build-arg VERSION="$VERSION_TAG" -t "$IMAGE_NAME" .
     - podman tag "$IMAGE_NAME" "$IMAGE_NAME:$VERSION_TAG"
     - podman login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" $CI_REGISTRY
     - podman push "$IMAGE_NAME:$VERSION_TAG"
@@ -39,8 +42,11 @@ build-docker-image: &build-docker
 build-docker-image-tags:
   <<: *build-docker
   script:
-    - podman build -t "$IMAGE_NAME" .
+    # The tag verbatim, "v" included, matching github.ref_name in
+    # .github/workflows/docker-publish.yml so the same git tag reports the same
+    # version whichever CI built it.
     - export VERSION_TAG="$CI_COMMIT_TAG"
+    - podman build --build-arg VERSION="$VERSION_TAG" -t "$IMAGE_NAME" .
     - podman tag "$IMAGE_NAME" "$IMAGE_NAME:$VERSION_TAG"
     - podman login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" $CI_REGISTRY
     - podman push "$IMAGE_NAME:$VERSION_TAG"

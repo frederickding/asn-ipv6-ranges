@@ -56,6 +56,11 @@ spec:
         - name: asn-ipv6-ranges
           # /-/status was added in commit b6e6f58. An older image 404s on the
           # probe path and the pod will CrashLoopBackOff — pin at or after it.
+          #
+          # CI stamps this tag into the binary, so once a pod is up:
+          #   kubectl exec deploy/asn-ipv6-ranges -- /asn-ipv6-ranges -version
+          # or `curl <pod>:8080/-/version` confirms the running build matches
+          # the tag pinned here. See doc/version.md.
           image: registry.gitlab.fjd.io/frederick/asn-ipv6-ranges:v1.0.0
           imagePullPolicy: IfNotPresent
           env:

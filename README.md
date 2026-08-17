@@ -16,6 +16,7 @@ networking — the service never shells out to a `whois` binary.
 | --- | --- |
 | `GET /as/{asn}` | IPv6 prefixes for an ASN |
 | `GET /-/status` | Health check for probes and monitoring |
+| `GET /-/version` | Which build this process is running, as JSON |
 
 ## `GET /as/{asn}`
 
@@ -266,6 +267,54 @@ readinessProbe:
 To alert on upstream failures — which this endpoint intentionally ignores —
 monitor the `502` rate on `/as/{asn}` instead.
 
+The version is deliberately *not* reported here; it has its own endpoint.
+
+## `GET /-/version` — build identity
+
+Returns the build this process is running, as JSON:
+
+```bash
+curl http://localhost:8080/-/version
+```
+
+```json
+{
+  "version": "v1.1.0",
+  "revision": "b2bb7ae57e96621a6cf5a0cdb577457ab99a92b1",
+  "modified": true,
+  "go": "go1.24.4"
+}
+```
+
+`revision` and `modified` come from the VCS data Go stamps automatically and are
+**omitted** in a container build, which has no repository to read. `version` is
+whatever CI stamped in — for a tagged release, the git tag verbatim.
+
+Like `/-/status` it performs no upstream I/O and holds no locks, so it answers
+even while every upstream is down. Unlike `/-/status` it is **not** exempt from
+`MAX_INFLIGHT`: nothing polls it on an interval, so it is ordinary traffic and an
+unauthenticated endpoint should not get a free pass past the shed limit. It
+carries `Cache-Control: no-store`, accepts `GET` and `HEAD`, returns `405`
+otherwise, and matches its path exactly.
+
+The same string is available without HTTP, which is how to interrogate an image
+without starting a server:
+
+```bash
+docker run --rm asn-ipv6-ranges:v1.1.0 -version
+```
+
+and it opens the startup log line:
+
+```
+2026/08/17 03:33:02 asn-ipv6-ranges v1.1.0 listening on :8080
+```
+
+Because the stamped version is also the image tag CI pushed, this is what
+confirms a pod matches the tag its manifest pins. See
+[doc/version.md](doc/version.md) for how the string is resolved and plumbed
+through both CI systems.
+
 ## Configuration
 
 | Variable | Default | Purpose |
@@ -433,6 +482,7 @@ binary — `internal/` packages are linked in, not separate services.
 main.go                        server wiring and graceful shutdown
 handler.go                     /as/{asn} handler, parameter parsing, output rendering
 health.go                      /-/status health check
+version.go                     /-/version, build identity, link-time version stamp
 accesslog.go                   nginx common-format request logging (stdout)
 stats.go                       5-minute cache and memory stats (stderr)
 cache.go                       caches, request coalescing, org source resolution, test seams
@@ -449,6 +499,7 @@ internal/whoisfreaks/          WhoisFreaks organization lookup (HTTPS)
 internal/ratelimit/            token bucket + concurrency ceiling per upstream
 doc/networking.md              ports, egress, upstream rate limits and budgets
 doc/logging.md                 access log format, stats line, operational lines
+doc/version.md                 how the version string is stamped in and reported
 ```
 
 The packages expose narrow APIs — `radb.Query(ctx, asn)`,
@@ -474,6 +525,18 @@ Tests make no network calls: the WHOIS client, organization lookup, clock, and
 environment reader are all substituted, and a test that reaches the metered API
 without an explicit hook fails loudly.
 
+A plain `go build` reports itself as `dev-<short sha>` (plus `-dirty` on a
+modified tree), read from the VCS data Go stamps automatically. To stamp a
+release name instead — which is what CI does — link it in:
+
+```bash
+go build -ldflags="-X main.version=$(git describe --tags)" -o asn-ipv6-ranges .
+```
+
+```bash
+./asn-ipv6-ranges -version
+```
+
 ## Container
 
 A multi-stage `Dockerfile` builds a static binary and copies it into `scratch`,
@@ -487,6 +550,22 @@ docker build -t asn-ipv6-ranges .
 ```bash
 docker run --rm -p 8080:8080 asn-ipv6-ranges
 ```
+
+Pass `VERSION` to stamp the build into the binary, so `/-/version` and
+`-version` report something meaningful. Without it the image honestly reports
+`dev` — Go's automatic VCS stamping cannot help here, because `.dockerignore`
+excludes `.git` and only sources are copied into the build stage:
+
+```bash
+docker build --build-arg VERSION=v1.1.0 -t asn-ipv6-ranges:v1.1.0 .
+```
+
+```bash
+docker run --rm asn-ipv6-ranges:v1.1.0 -version
+```
+
+Both CI pipelines pass the same string they tag the image with, so a running pod
+names the exact image to pull.
 
 The container honors a platform-supplied `PORT` and shuts down gracefully on
 `SIGTERM`, letting in-flight requests finish.

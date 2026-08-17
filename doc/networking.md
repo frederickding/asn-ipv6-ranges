@@ -17,7 +17,7 @@ miss when a cluster's default egress rules assume HTTPS is enough.
 | --- | --- |
 | Listen address | `LISTEN_ADDR` if set, else `:$PORT`, else `:8080` |
 | Protocol | HTTP/1.1, cleartext (terminate TLS in front of it) |
-| Routes | `GET\|HEAD /as/{asn}`, `GET\|HEAD /-/status` |
+| Routes | `GET\|HEAD /as/{asn}`, `GET\|HEAD /-/status`, `GET\|HEAD /-/version` |
 
 No authentication, no request body: parameters are read from the URL query
 only, never from a body, so nothing is gained by POSTing to it.
@@ -44,6 +44,13 @@ that the cap exists to limit.
 `/-/status` is exempt from the cap. Shedding a readiness probe under load would
 depool a pod that is behaving exactly as designed, turning overload into an
 outage.
+
+`/-/version` is **not** exempt, despite sharing the `/-/` prefix. Nothing polls
+it on an interval, so it is ordinary traffic; exempting an unauthenticated
+endpoint would hand out a way past the shed limit. It performs no I/O and
+touches no shared state, so it answers even while every upstream is unreachable
+— which is when you most want to know which image is live. What it reports and
+how that string is produced is in [version.md](version.md).
 
 The request deadline is cancelled when the client disconnects, so an aborted
 request stops its upstream work rather than running it to completion. A request

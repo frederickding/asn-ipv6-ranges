@@ -12,6 +12,8 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -33,13 +35,26 @@ func listenAddr() string {
 }
 
 func main() {
+	// The only flag this command takes. Because the image ENTRYPOINT is the
+	// binary itself, this makes `docker run <image> -version` report what an
+	// image contains without starting a server. Note that introducing flag
+	// parsing at all means unrecognized arguments are now rejected rather than
+	// ignored.
+	showVersion := flag.Bool("version", false, "print the version and exit")
+	flag.Parse()
+	if *showVersion {
+		fmt.Println(build.Version)
+		return
+	}
+
 	initAccessLog()
 	initLimits()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/as/", asHandler)
-	// Exact path, no trailing slash: only /-/status matches.
+	// Exact paths, no trailing slash: only /-/status and /-/version match.
 	mux.HandleFunc(statusPath, statusHandler)
+	mux.HandleFunc(versionPath, versionHandler)
 
 	// The concurrency cap sits inside the access log so shed requests are still
 	// logged — a burst of 503s is exactly what an operator needs to see.
@@ -76,7 +91,7 @@ func main() {
 	startStatsLogger(ctx)
 
 	go func() {
-		log.Printf("listening on %s", srv.Addr)
+		log.Printf("asn-ipv6-ranges %s listening on %s", build.Version, srv.Addr)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("server error: %v", err)
 		}

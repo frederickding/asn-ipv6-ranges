@@ -188,6 +188,18 @@ func TestAccessLogSkipsProbes(t *testing.T) {
 			t.Errorf("probe request was not logged: %q", buf.String())
 		}
 	})
+
+	// Only statusPath is suppressed. /-/version shares the operational prefix
+	// but nothing polls it on an interval, so it is ordinary traffic and
+	// suppressing it would hide someone enumerating the deployed build.
+	t.Run("other operational paths are still logged", func(t *testing.T) {
+		buf := captureAccessLog(t, at)
+		serve(withAccessLog(okHandler("ok")), httptest.NewRequest(http.MethodGet, versionPath, nil))
+
+		if !strings.Contains(buf.String(), versionPath) {
+			t.Errorf("%s was not logged: %q", versionPath, buf.String())
+		}
+	})
 }
 
 func TestAccessLogDisabled(t *testing.T) {
