@@ -40,7 +40,7 @@ uncached request needs a budget slot before it does any real work, and a spent
 budget fails fast (`503`) rather than queuing, so at most `radbBudget.concurrency`
 (3) requests can ever be holding a RADB response at once regardless of
 `MAX_INFLIGHT`. Measured: 32 concurrent requests for 32 distinct, uncached
-real ASNs sitting at the 8 MiB `radb.maxBody` cap produced exactly 3 successes
+real ASNs sitting at the then-8 MiB `radb.maxBody` cap produced exactly 3 successes
 and 9 immediate sub-5ms `503`s — the rest of a larger `MAX_INFLIGHT` would
 never have been reachable.
 
@@ -341,7 +341,7 @@ The budgets are the last line, not the first. Three things sit in front:
 
 | Upstream | Connect + read timeout | Body cap | On overrun |
 | --- | --- | --- | --- |
-| RADB | 15s | 8 MiB | Error. Deliberately not truncation: a short read would silently report fewer prefixes than the ASN originates. |
+| RADB | 15s | 20 MiB | Error (`radb.ErrTooLarge`). Deliberately not truncation: a short read would silently report fewer prefixes than the ASN originates. Sized to AS13335's measured 16.28 MB response. With `org=1` the request still returns an org name; only the prefix section is reported unavailable. |
 | Team Cymru DNS zone | 5s | N/A — a DNS message's size is already bounded by the protocol, not by an application-level cap | Error (`LookupTXT` fails; there's nothing to truncate). |
 | RIR whois | 15s | 1 MiB | Silent truncation. |
 | RIR RDAP | 15s | 1 MiB | Silent truncation. Status is checked *before* the body is read, so a rate-limit response costs nothing to discover. |

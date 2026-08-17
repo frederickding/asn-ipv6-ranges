@@ -5,11 +5,20 @@ package radb
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"time"
 )
+
+// ErrTooLarge reports that RADB answered, but with more than maxBody bytes.
+//
+// Distinct from every other failure here because it says something specific:
+// the ASN exists and has route objects, we just declined to hold them. A
+// caller can still usefully answer parts of a request that do not depend on
+// this response.
+var ErrTooLarge = errors.New("response exceeds size limit")
 
 // Host is the registry hostname, reported in service output.
 const Host = "whois.radb.net"
@@ -18,10 +27,13 @@ const timeout = 15 * time.Second
 
 // maxBody bounds the read: this is third-party input, and an inverse lookup on
 // a large ASN returns every route object it originates. Measured responses:
-// AS2906 35 KB, AS7018 0.77 MB, AS3356 1.12 MB, AS4134 2.43 MB. 8 MiB leaves
-// roughly 3x headroom over the largest of those while capping a single
-// request's allocation.
-const maxBody = 8 << 20
+// AS2906 35 KB, AS7018 0.77 MB, AS3356 1.12 MB, AS4134 2.43 MB, AS13335
+// 16.28 MB. AS13335 is the outlier that sets this cap — its 53,486 route6 and
+// 7,613 route objects include IRRd's RPKI-to-IRR auto-converted entries. 20
+// MiB clears it with ~23% headroom while capping a single request's
+// allocation; raising it further has a real cost, since radbBudget.concurrency
+// (3) responses can be in memory at once.
+const maxBody = 20 << 20
 
 // addr is the WHOIS endpoint; overridden in tests to point at a local listener.
 var addr = Host + ":43"
@@ -67,7 +79,7 @@ func Query(ctx context.Context, asn string) (string, error) {
 		return "", err
 	}
 	if len(body) > maxBody {
-		return "", fmt.Errorf("response exceeds %d bytes", maxBody)
+		return "", fmt.Errorf("%w: %d bytes", ErrTooLarge, maxBody)
 	}
 	return string(body), nil
 }

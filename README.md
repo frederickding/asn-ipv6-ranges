@@ -429,15 +429,25 @@ once, regardless of how many are inbound. See
 That row is the demonstration, not a scaling factor: raising `MAX_INFLIGHT`
 past 12 would not raise it further, since RADB's own budget — not
 `MAX_INFLIGHT` — is what stops at 3. A single RADB response is separately
-capped at 8 MiB, so concurrency cannot spike without bound regardless. That
-cap is enforced rather than truncating: the largest real responses measured
-are 1.12 MB (AS3356) and 2.43 MB (AS4134), and a response over the cap
-returns an error instead of a silently shortened prefix list.
+capped at 20 MiB, so concurrency cannot spike without bound regardless. That
+cap is enforced rather than truncating: the largest real response measured is
+16.28 MB (AS13335, whose route-object count is inflated by IRRd's
+RPKI-to-IRR conversion), and a response over the cap returns an error instead
+of a silently shortened prefix list. The measured row above predates the
+raise from 8 MiB and is retained as the concurrency demonstration it is.
 
-The supplied Kubernetes manifest sets `limits.memory: 96Mi` with
-`GOMEMLIMIT=80MiB`, so the Go GC works harder as it approaches the ceiling
-instead of the pod being OOM-killed. See [doc/caching.md](doc/caching.md#memory)
-for how the cache capacities themselves contribute to that ceiling.
+A too-large response is the one upstream failure that does not sink the whole
+request: with `org=1`, the organization name still comes back (it is resolved
+from an unrelated source), and the prefix section reports
+`# prefixes: unavailable`.
+
+The supplied Kubernetes manifest sets `limits.memory: 128Mi` with
+`GOMEMLIMIT=80MiB`. The gap between them is deliberate headroom for the 20
+MiB body cap rather than a soft landing: the Go GC works harder as it
+approaches `GOMEMLIMIT`, and a pathological burst that still overruns
+`128Mi` is OOM-killed and restarted, which the two-replica default absorbs.
+See [doc/caching.md](doc/caching.md#memory) for how the cache capacities
+themselves contribute to that ceiling.
 
 ## Responses
 

@@ -14,6 +14,7 @@ import (
 	"asn-ipv6-ranges/internal/asnreg"
 	"asn-ipv6-ranges/internal/cymrudns"
 	"asn-ipv6-ranges/internal/peeringdb"
+	"asn-ipv6-ranges/internal/radb"
 )
 
 func TestASHandlerValidation(t *testing.T) {
@@ -644,6 +645,78 @@ func TestOrgAutoSkipsRegistryWhenBothConfirmedBlank(t *testing.T) {
 	}
 	if !hasComment(body, "# count: 2") {
 		t.Errorf("prefixes missing after org short-circuit:\n%s", body)
+	}
+}
+
+// TestOversizedPrefixResponseStillAnswersOrg: a RADB response too large to
+// hold says nothing about the org name, which comes from an unrelated
+// source. The client asked for it, so it still gets one — with the prefix
+// section explicitly reported unavailable rather than silently absent.
+func TestOversizedPrefixResponseStillAnswersOrg(t *testing.T) {
+	clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	swapTestHooks(t, &clock, func(string) (string, error) {
+		return "", fmt.Errorf("%w: %d bytes", radb.ErrTooLarge, 20<<20)
+	})
+
+	orgCymruLookup = func(context.Context, string, string) (string, error) {
+		return "CLOUDFLARENET - Cloudflare, Inc., US", nil
+	}
+
+	rec := httptest.NewRecorder()
+	asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/"+arinASN+"?org=1", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d, want 200: an oversized prefix list must not sink the org lookup", rec.Code)
+	}
+	body := rec.Body.String()
+	if !hasComment(body, "# org: CLOUDFLARENET - Cloudflare, Inc., US (source: "+cymrudns.Host+")") {
+		t.Errorf("org name missing:\n%s", body)
+	}
+	if !strings.Contains(body, "# prefixes: unavailable") {
+		t.Errorf("missing the unavailable-prefixes note:\n%s", body)
+	}
+	// Nothing may imply a prefix list was actually retrieved.
+	for _, unwanted := range []string{"# count:", "# queried:", "# aggregate:"} {
+		if strings.Contains(body, unwanted) {
+			t.Errorf("unexpected %q in a failed prefix lookup:\n%s", unwanted, body)
+		}
+	}
+}
+
+// TestOversizedPrefixResponseWithoutOrgStillFails: the fallback above is
+// scoped to what was asked for. Without org=1 there is nothing left to
+// answer, so the request fails as it always has.
+func TestOversizedPrefixResponseWithoutOrgStillFails(t *testing.T) {
+	clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	swapTestHooks(t, &clock, func(string) (string, error) {
+		return "", fmt.Errorf("%w: %d bytes", radb.ErrTooLarge, 20<<20)
+	})
+	// Every org source is left at swapTestHooks' t.Error default: none may be
+	// reached when the client never asked for an org name.
+
+	rec := httptest.NewRecorder()
+	asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/"+arinASN, nil))
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("got %d, want 502", rec.Code)
+	}
+}
+
+// TestOtherPrefixFailureDoesNotAnswerOrg: only ErrTooLarge earns the partial
+// answer. A dial failure or timeout gives no reason to believe the rest of
+// the request is answerable, so it keeps failing outright.
+func TestOtherPrefixFailureDoesNotAnswerOrg(t *testing.T) {
+	clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	swapTestHooks(t, &clock, func(string) (string, error) {
+		return "", errors.New("dial tcp: connection refused")
+	})
+	// Org sources stay at their t.Error defaults: none may be reached.
+
+	rec := httptest.NewRecorder()
+	asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/"+arinASN+"?org=1", nil))
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("got %d, want 502", rec.Code)
 	}
 }
 
