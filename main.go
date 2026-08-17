@@ -34,16 +34,37 @@ func listenAddr() string {
 
 func main() {
 	initAccessLog()
+	initLimits()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/as/", asHandler)
 	// Exact path, no trailing slash: only /-/status matches.
 	mux.HandleFunc(statusPath, statusHandler)
 
+	// The concurrency cap sits inside the access log so shed requests are still
+	// logged — a burst of 503s is exactly what an operator needs to see.
 	srv := &http.Server{
-		Addr:              listenAddr(),
-		Handler:           withAccessLog(mux),
+		Addr:    listenAddr(),
+		Handler: withAccessLog(withInflightLimit(mux)),
+
+		// Every one of these is load-bearing, and Go defaults them all to no
+		// limit at all. Without ReadTimeout and WriteTimeout a client that
+		// dribbles a request or refuses to read a response holds a goroutine
+		// and its buffers indefinitely, which is the cheapest way to exhaust
+		// this process's memory. Without IdleTimeout, keep-alive connections
+		// are never reaped.
+		//
+		// WriteTimeout must stay above the handler's requestTimeout, or a slow
+		// upstream would drop the connection before the handler could render
+		// the error explaining why.
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+
+		// The request line and headers are attacker-controlled and reach a
+		// builder in the access log. Nothing here needs Go's 1 MB default.
+		MaxHeaderBytes: 16 << 10,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

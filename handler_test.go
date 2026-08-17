@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -172,7 +173,7 @@ func TestASHandlerOrgSources(t *testing.T) {
 		clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 		swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })
 		getenv = func(string) string { return "secret-key" }
-		orgAPILookup = func(string, string) (string, error) {
+		orgAPILookup = func(context.Context, string, string) (string, error) {
 			t.Error("org lookup ran without ?org=1")
 			return "", nil
 		}
@@ -196,8 +197,8 @@ func TestASHandlerOrgSources(t *testing.T) {
 			}
 			return "secret-key"
 		}
-		orgAPILookup = func(string, string) (string, error) { return "From API", nil }
-		orgRIRLookup = func(asnreg.Registry, string) (string, error) {
+		orgAPILookup = func(context.Context, string, string) (string, error) { return "From API", nil }
+		orgRIRLookup = func(context.Context, asnreg.Registry, string) (string, error) {
 			t.Error("whois queried even though the API succeeded")
 			return "", nil
 		}
@@ -214,7 +215,7 @@ func TestASHandlerOrgSources(t *testing.T) {
 		clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 		swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })
 		getenv = func(string) string { return "" }
-		orgRIRLookup = func(reg asnreg.Registry, asn string) (string, error) {
+		orgRIRLookup = func(_ context.Context, reg asnreg.Registry, asn string) (string, error) {
 			if reg.Name != "ARIN" {
 				t.Errorf("resolved against %q, want ARIN", reg.Name)
 			}
@@ -233,7 +234,7 @@ func TestASHandlerOrgSources(t *testing.T) {
 		clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 		swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })
 		getenv = func(string) string { return "secret-key" }
-		orgAPILookup = func(string, string) (string, error) { return "From API", nil }
+		orgAPILookup = func(context.Context, string, string) (string, error) { return "From API", nil }
 
 		rec := httptest.NewRecorder()
 		asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/"+arinASN+"?org=1&src=api", nil))
@@ -264,11 +265,11 @@ func TestASHandlerOrgSources(t *testing.T) {
 		clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 		swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })
 		getenv = func(string) string { return "secret-key" }
-		orgAPILookup = func(string, string) (string, error) {
+		orgAPILookup = func(context.Context, string, string) (string, error) {
 			t.Error("API called despite src=whois")
 			return "", nil
 		}
-		orgRIRLookup = func(asnreg.Registry, string) (string, error) { return "From whois", nil }
+		orgRIRLookup = func(context.Context, asnreg.Registry, string) (string, error) { return "From whois", nil }
 
 		rec := httptest.NewRecorder()
 		asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/"+arinASN+"?org=1&src=whois", nil))
@@ -282,15 +283,15 @@ func TestASHandlerOrgSources(t *testing.T) {
 		clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 		swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })
 		getenv = func(string) string { return "secret-key" }
-		orgAPILookup = func(string, string) (string, error) {
+		orgAPILookup = func(context.Context, string, string) (string, error) {
 			t.Error("API called despite src=rdap")
 			return "", nil
 		}
-		orgRIRLookup = func(asnreg.Registry, string) (string, error) {
+		orgRIRLookup = func(context.Context, asnreg.Registry, string) (string, error) {
 			t.Error("whois called despite src=rdap")
 			return "", nil
 		}
-		orgRDAPLookup = func(asnreg.Registry, string) (string, error) { return "From RDAP", nil }
+		orgRDAPLookup = func(context.Context, asnreg.Registry, string) (string, error) { return "From RDAP", nil }
 
 		rec := httptest.NewRecorder()
 		asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/"+arinASN+"?org=1&src=rdap", nil))
@@ -306,15 +307,15 @@ func TestASHandlerOrgSources(t *testing.T) {
 		clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 		swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })
 		getenv = func(string) string { return "secret-key" }
-		orgAPILookup = func(string, string) (string, error) {
+		orgAPILookup = func(context.Context, string, string) (string, error) {
 			t.Error("API used as a fallback despite src=whois")
 			return "Should Not Appear", nil
 		}
-		orgRDAPLookup = func(asnreg.Registry, string) (string, error) {
+		orgRDAPLookup = func(context.Context, asnreg.Registry, string) (string, error) {
 			t.Error("RDAP used as a fallback despite src=whois")
 			return "Should Not Appear", nil
 		}
-		orgRIRLookup = func(asnreg.Registry, string) (string, error) {
+		orgRIRLookup = func(context.Context, asnreg.Registry, string) (string, error) {
 			return "", errors.New("dial tcp: timeout")
 		}
 
@@ -360,7 +361,7 @@ func TestASHandlerOrgSources(t *testing.T) {
 		clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 		swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })
 		getenv = func(string) string { return "" }
-		orgRIRLookup = func(asnreg.Registry, string) (string, error) {
+		orgRIRLookup = func(context.Context, asnreg.Registry, string) (string, error) {
 			return "Evil Corp\n2001:dead::/32", nil
 		}
 
@@ -379,11 +380,11 @@ func TestASHandlerOrgSources(t *testing.T) {
 		swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })
 		getenv = func(string) string { return "secret-key" }
 		apiCalls, rdapCalls := 0, 0
-		orgAPILookup = func(string, string) (string, error) {
+		orgAPILookup = func(context.Context, string, string) (string, error) {
 			apiCalls++
 			return "From API", nil
 		}
-		orgRDAPLookup = func(asnreg.Registry, string) (string, error) {
+		orgRDAPLookup = func(context.Context, asnreg.Registry, string) (string, error) {
 			rdapCalls++
 			return "From RDAP", nil
 		}
@@ -440,11 +441,11 @@ func TestOrgAutoOrdering(t *testing.T) {
 			getenv = func(string) string { return "" } // no key: registry sources only
 
 			var order []string
-			orgRIRLookup = func(asnreg.Registry, string) (string, error) {
+			orgRIRLookup = func(context.Context, asnreg.Registry, string) (string, error) {
 				order = append(order, "whois")
 				return "name", nil
 			}
-			orgRDAPLookup = func(asnreg.Registry, string) (string, error) {
+			orgRDAPLookup = func(context.Context, asnreg.Registry, string) (string, error) {
 				order = append(order, "rdap")
 				return "name", nil
 			}
@@ -480,14 +481,14 @@ func TestOrgAutoFallsThrough(t *testing.T) {
 
 			var order []string
 			// The preferred source fails; the other must still answer.
-			orgRIRLookup = func(asnreg.Registry, string) (string, error) {
+			orgRIRLookup = func(context.Context, asnreg.Registry, string) (string, error) {
 				order = append(order, "whois")
 				if tt.wantOrder[0] == "whois" {
 					return "", errors.New("whois down")
 				}
 				return "Fallback Name", nil
 			}
-			orgRDAPLookup = func(asnreg.Registry, string) (string, error) {
+			orgRDAPLookup = func(context.Context, asnreg.Registry, string) (string, error) {
 				order = append(order, "rdap")
 				if tt.wantOrder[0] == "rdap" {
 					return "", errors.New("rdap down")

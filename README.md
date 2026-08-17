@@ -205,78 +205,14 @@ continues into a postal address.
 | --- | --- | --- |
 | RADB WHOIS | `whois.radb.net:43` (raw WHOIS over TCP) | Every uncached request. |
 | RIR whois servers | `whois.{arin,ripe,apnic,lacnic,afrinic}.net:43` | Only for `org` lookups, per the source order above, or when `src=whois`. |
-| RIR RDAP endpoints | `https://rdap.arin.net/registry`<br>`https://rdap.db.ripe.net/`<br>`https://rdap.apnic.net/`<br>`https://rdap.lacnic.net/rdap/`<br>`https://rdap.afrinic.net/rdap/` | Only for `org` lookups, per the source order above, or when `src=rdap`. |
+| RIR RDAP endpoints | `https://rdap.{arin,apnic,lacnic,afrinic}...`, `https://rdap.db.ripe.net/` | Only for `org` lookups, per the source order above, or when `src=rdap`. |
 | WhoisFreaks ASN WHOIS API | `https://api.whoisfreaks.com/v2.0/asn-whois` | Only when `org` is enabled and an API key is set, unless `src` selects another source. |
-| IANA AS number registries | `https://www.iana.org/assignments/as-numbers/as-numbers-1.csv` (16-bit)<br>`https://www.iana.org/assignments/as-numbers/as-numbers-2.csv` (32-bit) | Build time only, via `go generate` — two fetches total. Never at runtime. |
+| IANA AS number registries | `as-numbers-1.csv`, `as-numbers-2.csv` | Build time only, via `go generate`. Never at runtime. |
 
-### RADB WHOIS
-
-Queried on TCP port 43 with an inverse lookup on origin, terminated by CRLF:
-
-```
--i origin AS2906
-```
-
-The response is scanned for `route6:` attributes. Defined in
-`internal/radb/radb.go`.
-
-### RIR whois servers
-
-Which server is authoritative for an ASN comes from the generated IANA table,
-so no RIR-to-host mapping is hardcoded. The query is the ASN with an `AS`
-prefix, sent with `-r` to RPSL registries:
-
-```
--r AS56554
-```
-
-Implemented in `internal/rirwhois/rirwhois.go`; the per-registry response
-formats are described under [`src`](#src--choosing-the-org-source).
-
-### RIR RDAP endpoints
-
-The base URL for each registry comes from the `RDAP` column of the same IANA
-CSVs, so it is not hardcoded either. Requests are
-`GET {base}/autnum/{asn}` with `Accept: application/rdap+json`:
-
-```
-https://rdap.db.ripe.net/autnum/24940
-```
-
-Implemented in `internal/rdap/rdap.go`.
-
-> IANA publishes that column with two URLs concatenated for ARIN and AFRINIC
-> (`https://rdap.arin.net/registryhttp://rdap.arin.net/registry`). The generator
-> splits on the embedded scheme and keeps the `https` entry.
-
-### WhoisFreaks ASN WHOIS API
-
-Documentation: <https://whoisfreaks.com/documentation/asn-whois-api>
-
-The request is a `GET` to the endpoint above with three query parameters —
-`apiKey`, `asn` (sent with an `AS` prefix), and `format`:
-
-```
-https://api.whoisfreaks.com/v2.0/asn-whois?apiKey=YOUR_API_KEY&asn=AS2906&format=JSON
-```
-
-The organization name is read from the top-level `orgName` field, falling back
-to `asName` when `orgName` is empty. Implemented in
-`internal/whoisfreaks/whoisfreaks.go`.
-
-### IANA AS number registries
-
-Registry page: <https://www.iana.org/assignments/as-numbers/as-numbers.xhtml>
-
-`gen_asn_ranges.go` fetches both sub-registries — 16-bit and 32-bit — exactly
-once each at build time and keeps only rows whose description begins with
-`Assigned by ` (the five RIRs). Each kept row contributes its range, the
-registry name, and the authoritative whois server and RDAP base from the CSV's
-own `WHOIS` and `RDAP` columns. Rows marked `Unallocated`, `Reserved`, `Reserved for Private Use`,
-`Reserved for use in documentation and sample code`, or `AS_TRANS` are excluded,
-which is what makes those ASNs return `400`.
-
-The result is written to `internal/asnreg/ranges_gen.go`, which is committed.
+**See [doc/networking.md](doc/networking.md)** for the full picture: exact
+hostnames and ports for firewall and `NetworkPolicy` rules, the query format
+each upstream is sent, the registries' published rate limits and the budgets
+this service holds itself to, and the timeouts and body caps applied to each.
 
 ## `GET /-/status` — health check
 
@@ -339,9 +275,12 @@ monitor the `502` rate on `/as/{asn}` instead.
 | `WHOISFREAKS_API_KEY` | — | Optional. When set, the WhoisFreaks API becomes the first `org` source tried; unset, `org` resolves from the ASN's registry instead. Not required for `org` to work. |
 | `ACCESS_LOG` | `1` | Request logging. Set `0`/`false` to disable. |
 | `ACCESS_LOG_PROBES` | `0` | Include `/-/status` in the access log. Useful when debugging probes. |
+| `MAX_INFLIGHT` | `32` | Concurrent requests held at once. Past it, requests get `503` with `Retry-After` rather than being queued. This is the hard bound on memory — raise it and the container memory limit together. |
 
 A value that isn't a recognized boolean logs a warning and keeps the default —
-misconfigured logging shouldn't stop the service from starting.
+misconfigured logging shouldn't stop the service from starting. `MAX_INFLIGHT`
+behaves the same way; zero and negative values are rejected rather than treated
+as unlimited, since unlimited is the behaviour the cap exists to remove.
 
 ## Logging
 
@@ -350,8 +289,8 @@ split:
 
 | Stream | Destination | Contents |
 | --- | --- | --- |
-| Access log | **stdout** | One line per request, no prefix |
-| Operational | **stderr** | Startup, shutdown, cache sweeps, periodic stats |
+| Access log | **stdout** | One line per request, in nginx's `common` format |
+| Operational | **stderr** | Startup, shutdown, cache sweeps, upstream pauses, periodic stats |
 
 So they can be separated with a plain redirect:
 
@@ -359,71 +298,18 @@ So they can be separated with a plain redirect:
 ./asn-ipv6-ranges 1>access.log 2>error.log
 ```
 
-### Access log
-
-On by default, in nginx's `common` log format:
-
-```
-$remote_addr - $remote_user [$time_local] "$request" $status $body_bytes_sent
-```
-
-```
-203.0.113.45 - - [16/Aug/2026:23:34:21 +0000] "GET /as/24940?org=1 HTTP/1.1" 200 446
-127.0.0.1 - - [16/Aug/2026:23:34:20 +0000] "POST /as/2906 HTTP/1.1" 405 42
-127.0.0.1 - - [16/Aug/2026:23:34:21 +0000] "HEAD /as/2906 HTTP/1.1" 200 0
-```
-
-Access lines do **not** go through Go's standard logger, which would prefix each
-one with its own date and time and break the format for anything that parses
-nginx logs.
-
-- `$remote_user` is always `-`: the service has no authentication.
-- `$body_bytes_sent` counts the body only, excluding headers, and is `0` for
-  `HEAD` — matching nginx, since the body is discarded.
-- The request line is escaped the way nginx escapes values (`"` and `\`
-  backslash-escaped, control bytes as `\xHH`). Without this, a request target
-  containing a quote could close the `"$request"` field early and forge the
-  status and byte count, or inject an entire extra line.
-
-**`/-/status` is excluded by default.** The liveness and readiness probes run
-every 20s and 10s, so on a quiet pod they would outnumber real queries several
-times over. Set `ACCESS_LOG_PROBES=1` to include them.
-
-**Client address**: the left-most `X-Forwarded-For` entry is used when present,
-otherwise the socket address with the port stripped — the equivalent of nginx's
-realip module. This matters because the supplied Service uses
-`externalTrafficPolicy: Cluster`, so MetalLB SNATs the caller and the socket
-address is whichever node forwarded the packet. Note that `X-Forwarded-For` is
-supplied by the caller and trivially spoofed: it is fine for attribution in a
-log, and must never be treated as an authorization signal. The alternative is
-`externalTrafficPolicy: Local`, which preserves the real source IP at the
-network level.
-
-### Periodic stats
-
-Every 5 minutes, plus once at startup for a baseline, to stderr:
-
-```
-2026/08/16 23:35:10 cache prefix=2/256 org=0/256 | mem heap=8.2MiB sys=35.2MiB rss=26.9MiB limit=80.0MiB gc=9
-```
-
-| Field | Meaning |
-| --- | --- |
-| `prefix`, `org` | Cache occupancy against the 256-entry cap. A cache pinned at its limit means entries are being evicted. |
-| `heap` | Live heap (`HeapAlloc`). |
-| `sys` | Total memory obtained from the OS. |
-| `rss` | Resident set size, from `/proc/self/status`. This is what the kernel OOM-kills on and what a container memory limit governs; `heap` alone understates it. Omitted where `/proc` is unavailable. |
-| `limit` | Current `GOMEMLIMIT`, for direct comparison against the manifest. Omitted when unset. |
-| `gc` | Completed GC cycles. |
-
-The sample above is a real trace: the heap rose to 8.2 MiB while parsing AS3356's
-1.12 MB WHOIS response, then fell back to 1.4 MiB after the next GC.
+**See [doc/logging.md](doc/logging.md)** for the full picture: the access log
+format and its escaping rules, how the client address is resolved and why it is
+not an authorization signal, what is excluded and why, the fields in the
+5-minute stats line, and the operational lines worth alerting on.
 
 ## Caching
 
 Successful WHOIS lookups are cached in memory for 5 minutes per ASN, so repeated
 queries don't hit the upstream registry and risk rate limiting. Failed lookups
-are not cached, so a transient outage doesn't lock out retries.
+are cached too, but only for 30 seconds: long enough that an ASN nobody can
+resolve can't be replayed into one upstream query per request, short enough that
+a transient outage doesn't lock out retries for the full 5 minutes.
 
 The cache stores the un-aggregated prefix list and aggregation is applied when
 rendering, so `agg=0` and `agg=1` share a single upstream query. Organization
@@ -432,8 +318,12 @@ and registry servers rate-limit. That cache is keyed by the requested `src` as
 well as the ASN, so a `src=rdap` answer is never served to an `auto` request, or
 vice versa — the reported source is always the one that actually answered.
 
-Note that concurrent first-time requests for the same uncached ASN may each
-trigger an upstream query; requests are not coalesced.
+Concurrent first-time requests for the same uncached ASN are coalesced: 50
+simultaneous requests for one cold ASN produce a single upstream query, and the
+other 49 wait for its result. This is what keeps the upstream query rate tied to
+the number of distinct ASNs rather than the number of requests — see
+[doc/networking.md](doc/networking.md) for how it fits with the per-registry
+rate limits.
 
 ### Eviction and bounds
 
@@ -442,6 +332,7 @@ Three separate limits apply, and they do different jobs:
 | Limit | Value | Effect |
 | --- | --- | --- |
 | Freshness | 5 minutes | Past this an entry is re-queried upstream rather than served. |
+| Freshness, failures | 30 seconds | A cached failure is retried sooner than a cached answer is refreshed. |
 | Retention | 1 hour | Past this an entry is **deleted**. Only entries nobody has successfully refreshed get this old, so this reclaims ASNs queried once and never again. |
 | Capacity | 256 entries | Hard cap per cache. At capacity, the least recently refreshed entry is evicted to make room. |
 
@@ -464,8 +355,10 @@ with the number of distinct ASNs ever queried. Measured:
 | 256 cached ASNs, 2000 prefixes each (far beyond any real ASN) | 51 MB |
 | 64 concurrent requests for a 2.3 MB upstream response | 29 MB |
 
-A single RADB response is separately capped at 8 MiB, so concurrency cannot
-spike without bound. That cap is enforced rather than truncating: the largest
+Concurrency is capped at `MAX_INFLIGHT` (32 by default), so the last row is a
+measurement of twice what the service will now hold at once. A single RADB
+response is separately capped at 8 MiB, so concurrency cannot spike without
+bound. That cap is enforced rather than truncating: the largest
 real responses measured are 1.12 MB (AS3356) and 2.43 MB (AS4134), and a
 response over the cap returns an error instead of a silently shortened prefix
 list.
@@ -485,6 +378,8 @@ For `/as/{asn}`:
 | `404` | Unknown path — neither `/as/{asn}` nor `/-/status`. |
 | `405` | Method other than `GET` or `HEAD`. |
 | `502` | The upstream WHOIS query failed. |
+| `503` | The service is at `MAX_INFLIGHT`, or the query budget for the upstream this request needs is spent. Carries `Retry-After`. See [doc/networking.md](doc/networking.md). |
+| `504` | The request exhausted its 20-second budget before an upstream answered. |
 
 An org lookup failure is **not** in this table: it reports the reason in a
 comment and still returns `200`, because the prefix list is the primary output.
@@ -540,7 +435,9 @@ handler.go                     /as/{asn} handler, parameter parsing, output rend
 health.go                      /-/status health check
 accesslog.go                   nginx common-format request logging (stdout)
 stats.go                       5-minute cache and memory stats (stderr)
-cache.go                       5-minute caches, org source resolution, test seams
+cache.go                       caches, request coalescing, org source resolution, test seams
+limits.go                      inbound concurrency cap (MAX_INFLIGHT)
+upstream.go                    per-registry outbound query budgets
 asn.go                         ASN parsing and validation
 prefixes.go                    route6 extraction, sorting, aggregation
 gen_asn_ranges.go              generator (build-time only, //go:build ignore)
@@ -549,11 +446,15 @@ internal/radb/                 RADB WHOIS client (raw TCP, port 43)
 internal/rirwhois/             RIR WHOIS client + per-registry parsing
 internal/rdap/                 RIR RDAP client + jCard extraction
 internal/whoisfreaks/          WhoisFreaks organization lookup (HTTPS)
+internal/ratelimit/            token bucket + concurrency ceiling per upstream
+doc/networking.md              ports, egress, upstream rate limits and budgets
+doc/logging.md                 access log format, stats line, operational lines
 ```
 
-The packages expose narrow APIs — `radb.Query(asn)`,
-`whoisfreaks.LookupOrgName(asn, apiKey)`, `rirwhois.LookupOrgName(reg, asn)`,
-`rdap.LookupOrgName(reg, asn)`, and `asnreg.Lookup(asn)` — and the main package
+The packages expose narrow APIs — `radb.Query(ctx, asn)`,
+`whoisfreaks.LookupOrgName(ctx, asn, apiKey)`,
+`rirwhois.LookupOrgName(ctx, reg, asn)`, `rdap.LookupOrgName(ctx, reg, asn)`,
+and `asnreg.Lookup(asn)` — and the main package
 reaches the network ones through overridable variables, so tests substitute all
 of them without a network. The `rirwhois` and `rdap` tests run against sanitized
 real responses in their `testdata/` directories, with contact details redacted

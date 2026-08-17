@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bufio"
+	"context"
+	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -10,6 +12,15 @@ import (
 
 	"asn-ipv6-ranges/internal/radb"
 )
+
+// requestTimeout bounds all the upstream work one request may do.
+//
+// An org lookup can try three sources in turn, each with its own 10-15s client
+// timeout, so without an overall budget a single request could hold a goroutine
+// and its buffers for over a minute. This is deliberately shorter than the
+// server's WriteTimeout so the deadline fires as a rendered error rather than a
+// dropped connection.
+const requestTimeout = 20 * time.Second
 
 func writeError(w http.ResponseWriter, status int, format string, args ...any) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -92,24 +103,38 @@ func asHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	prefixes, queriedAt, err := getPrefixes(asn)
+	// One deadline for every upstream call this request makes, cancelled with
+	// the request itself: a client that disconnects must not leave queries
+	// running against registries that count them.
+	ctx, cancel := context.WithTimeout(r.Context(), requestTimeout)
+	defer cancel()
+
+	prefixes, queriedAt, err := getPrefixes(ctx, asn)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "whois query failed: %v", err)
+		writeUpstreamError(w, "whois query failed", err)
 		return
 	}
 	if aggregate {
 		prefixes = aggregatePrefixes(prefixes)
 	}
 
-	var b strings.Builder
-	fmt.Fprintf(&b, "# IPv6 prefixes for AS%s (source: %s)\n", asn, radb.Host)
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+
+	// Written straight through rather than assembled in memory first. The
+	// prefix list for a large ASN is the biggest thing this process holds, and
+	// buffering the rendered copy alongside the cached one doubled that for
+	// every concurrent request.
+	b := bufio.NewWriter(w)
+	defer b.Flush()
+
+	fmt.Fprintf(b, "# IPv6 prefixes for AS%s (source: %s)\n", asn, radb.Host)
 	switch {
 	case wantOrg:
 		// An org lookup failure must not sink the prefix list.
-		if res, err := getOrgName(asn, v, orgSrc); err != nil {
-			fmt.Fprintf(&b, "# org: lookup failed: %s\n", singleLine(err.Error()))
+		if res, err := getOrgName(ctx, asn, v, orgSrc); err != nil {
+			fmt.Fprintf(b, "# org: lookup failed: %s\n", singleLine(err.Error()))
 		} else {
-			fmt.Fprintf(&b, "# org: %s (source: %s)\n", singleLine(res.name), res.source)
+			fmt.Fprintf(b, "# org: %s (source: %s)\n", singleLine(res.name), res.source)
 		}
 	case r.URL.Query().Get("src") != "":
 		b.WriteString("# src: ignored (org lookup not requested)\n")
@@ -122,14 +147,32 @@ func asHandler(w http.ResponseWriter, r *http.Request) {
 	if len(prefixes) == 0 {
 		b.WriteString("# no IPv6 prefixes found\n")
 	} else {
-		fmt.Fprintf(&b, "# count: %d\n", len(prefixes))
+		fmt.Fprintf(b, "# count: %d\n", len(prefixes))
 		for _, p := range prefixes {
 			b.WriteString(p.String())
 			b.WriteString("\n")
 		}
 	}
-	fmt.Fprintf(&b, "# queried: %s\n", queriedAt.UTC().Format(time.RFC3339))
+	fmt.Fprintf(b, "# queried: %s\n", queriedAt.UTC().Format(time.RFC3339))
+}
 
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	io.WriteString(w, b.String())
+// writeUpstreamError renders a failed upstream lookup.
+//
+// A spent query budget is reported as 503 with Retry-After rather than 502: the
+// upstream did not fail, we declined to ask it, and the client can usefully
+// wait. Anything else stays 502 — a genuine upstream problem is not something
+// the client can fix by retrying at a particular time.
+func writeUpstreamError(w http.ResponseWriter, what string, err error) {
+	var budget *budgetError
+	if errors.As(err, &budget) {
+		w.Header().Set("Retry-After", strconv.Itoa(retryAfterFor(budget.host)))
+		writeError(w, http.StatusServiceUnavailable, "%s: %v", what, err)
+		return
+	}
+	// The request ran out of its own time rather than the upstream failing.
+	if errors.Is(err, context.DeadlineExceeded) {
+		writeError(w, http.StatusGatewayTimeout, "%s: %v", what, err)
+		return
+	}
+	writeError(w, http.StatusBadGateway, "%s: %v", what, err)
 }

@@ -4,6 +4,7 @@
 package radb
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -27,12 +28,23 @@ var addr = Host + ":43"
 
 // Query runs an inverse lookup on origin for the given ASN (decimal, no "AS"
 // prefix) and returns the raw RPSL response.
-func Query(asn string) (string, error) {
-	conn, err := net.DialTimeout("tcp", addr, timeout)
+//
+// The context bounds the whole exchange, not just the dial. A client that
+// disconnects mid-request must not leave this holding a connection to RADB:
+// abandoned work still counts against the concurrent-connection limit RADB
+// enforces per source IP.
+func Query(ctx context.Context, asn string) (string, error) {
+	dialer := net.Dialer{Timeout: timeout}
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return "", err
 	}
 	defer conn.Close()
+
+	// Unblocks the read below when the caller goes away: closing the connection
+	// is the only way to interrupt an in-progress Read on a net.Conn.
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
 
 	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
 		return "", err
@@ -46,6 +58,12 @@ func Query(asn string) (string, error) {
 	// than the ASN actually originates, with nothing to indicate the loss.
 	body, err := io.ReadAll(io.LimitReader(conn, maxBody+1))
 	if err != nil {
+		// A cancelled context closes the connection out from under the read, so
+		// the error would otherwise be a misleading "use of closed network
+		// connection" rather than the cancellation that caused it.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
+		}
 		return "", err
 	}
 	if len(body) > maxBody {

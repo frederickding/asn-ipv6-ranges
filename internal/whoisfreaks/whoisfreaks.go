@@ -7,6 +7,7 @@
 package whoisfreaks
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,9 +34,25 @@ const (
 // Overridden in tests to point at a stub server.
 var apiURL = "https://api.whoisfreaks.com/v2.0/asn-whois"
 
+// client is shared across lookups. Built once for the same reason as the RDAP
+// client: a per-call client falls back to http.DefaultTransport's two idle
+// connections per host and pays a TLS handshake per query.
+var client = &http.Client{
+	Timeout: timeout,
+	Transport: &http.Transport{
+		MaxIdleConns:        8,
+		MaxIdleConnsPerHost: 4,
+		MaxConnsPerHost:     4,
+		IdleConnTimeout:     90 * time.Second,
+	},
+}
+
 // LookupOrgName resolves the organization name for an ASN (decimal, no "AS"
 // prefix). It reads orgName, falling back to asName when that is blank.
-func LookupOrgName(asn, apiKey string) (string, error) {
+//
+// The context bounds the call so an abandoned request stops spending calls
+// against a metered API nobody is waiting on.
+func LookupOrgName(ctx context.Context, asn, apiKey string) (string, error) {
 	endpoint, err := url.Parse(apiURL)
 	if err != nil {
 		return "", err
@@ -46,8 +63,11 @@ func LookupOrgName(asn, apiKey string) (string, error) {
 		"format": {"JSON"},
 	}.Encode()
 
-	client := &http.Client{Timeout: timeout}
-	resp, err := client.Get(endpoint.String())
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return "", errors.New(redactKey(err.Error(), apiKey))
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", errors.New(redactKey(err.Error(), apiKey))
 	}

@@ -2,6 +2,7 @@ package rirwhois
 
 import (
 	"bufio"
+	"context"
 	"net"
 	"os"
 	"path/filepath"
@@ -139,7 +140,7 @@ func TestLookupOrgName(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			f := startFakeRIR(t, tt.responses)
 
-			got, err := LookupOrgName(tt.reg, tt.asn)
+			got, err := LookupOrgName(context.Background(), tt.reg, tt.asn)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -194,7 +195,7 @@ func TestLookupOrgNameIgnoresASBlock(t *testing.T) {
 			// Only the aut-num query is answered, so no handle resolution occurs.
 			startFakeRIR(t, map[string]string{tc.query: body})
 
-			got, err := LookupOrgName(tc.reg, tc.asn)
+			got, err := LookupOrgName(context.Background(), tc.reg, tc.asn)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -212,7 +213,7 @@ func TestLookupOrgNameIgnoresASBlock(t *testing.T) {
 
 func TestLookupOrgNameErrors(t *testing.T) {
 	t.Run("no whois host", func(t *testing.T) {
-		if _, err := LookupOrgName(asnreg.Registry{Name: "NOWHERE"}, "1"); err == nil {
+		if _, err := LookupOrgName(context.Background(), asnreg.Registry{Name: "NOWHERE"}, "1"); err == nil {
 			t.Error("expected an error when the registry has no host")
 		}
 	})
@@ -222,7 +223,7 @@ func TestLookupOrgNameErrors(t *testing.T) {
 			"-r AS99999": "% No entries found\n",
 		})
 		reg := asnreg.Registry{Name: "RIPE NCC", WHOISHost: "whois.ripe.net"}
-		if _, err := LookupOrgName(reg, "99999"); err == nil {
+		if _, err := LookupOrgName(context.Background(), reg, "99999"); err == nil {
 			t.Error("expected an error when no aut-num object is returned")
 		}
 	})
@@ -240,7 +241,7 @@ func TestLookupOrgNameErrors(t *testing.T) {
 		t.Cleanup(func() { dialAddr = orig })
 
 		reg := asnreg.Registry{Name: "ARIN", WHOISHost: "whois.arin.net"}
-		if _, err := LookupOrgName(reg, "2906"); err == nil {
+		if _, err := LookupOrgName(context.Background(), reg, "2906"); err == nil {
 			t.Error("expected a dial error")
 		}
 	})
