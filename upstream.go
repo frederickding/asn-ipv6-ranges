@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"asn-ipv6-ranges/internal/peeringdb"
 	"asn-ipv6-ranges/internal/ratelimit"
 )
 
@@ -93,7 +92,10 @@ var budgetFor = func(host string) budget {
 	case strings.Contains(host, "cymru"):
 		return cymruBudget
 	case strings.Contains(host, "peeringdb"):
-		if getenv(peeringdb.KeyEnv) != "" {
+		// peeringDBAPIKey, not the environment: a key the startup check
+		// rejected must drop this process back to the anonymous rate rather
+		// than keep querying at the authenticated one with no credential.
+		if peeringDBAPIKey() != "" {
 			return peeringdbAuthBudget
 		}
 		return peeringdbBudget
@@ -159,6 +161,22 @@ func pauseUpstream(host string, t time.Time) {
 // spent, in whole seconds.
 func retryAfterFor(host string) int {
 	return int(limiterFor(host).RetryAfter() / time.Second)
+}
+
+// forgetLimiter drops one host's limiter so the next query rebuilds it from a
+// freshly evaluated budget. For when the facts behind budgetFor change under
+// us, which today means exactly one thing: the PeeringDB key turned out to be
+// invalid and the anonymous rate now applies.
+//
+// A query already holding a slot on the discarded limiter is invisible to the
+// replacement, so concurrency can briefly exceed the new budget by the number
+// of calls in flight. Not worth solving here — this happens once, seconds
+// after startup, against a budget whose concurrency is measured in single
+// digits.
+func forgetLimiter(host string) {
+	limitersMu.Lock()
+	defer limitersMu.Unlock()
+	delete(limiters, host)
 }
 
 // resetLimiters drops all limiter state, so a test starts with full budgets.

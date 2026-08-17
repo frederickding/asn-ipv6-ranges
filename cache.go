@@ -74,6 +74,7 @@ var (
 	orgCymruLookup          = cymrudns.LookupOrgName
 	orgPeeringDBLookup      = peeringdb.LookupOrgName
 	orgPeeringDBBatchLookup = peeringdb.LookupOrgNames
+	orgPeeringDBVerify      = peeringdb.VerifyKey
 	orgRIRLookup            = rirwhois.LookupOrgName
 	orgRDAPLookup           = rdap.LookupOrgName
 	nowFunc                 = time.Now
@@ -542,7 +543,7 @@ func lookupCymru(ctx context.Context, asn string) (orgResult, error) {
 }
 
 func lookupPeeringDB(ctx context.Context, asn string) (orgResult, error) {
-	apiKey := getenv(peeringdb.KeyEnv)
+	apiKey := peeringDBAPIKey()
 	name, err := withUpstreamBudget(peeringdb.Host, func() (string, error) {
 		return orgPeeringDBLookup(ctx, asn, apiKey)
 	})

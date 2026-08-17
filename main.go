@@ -50,6 +50,7 @@ func main() {
 
 	initAccessLog()
 	initLimits()
+	logDataSources()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/as/", asHandler)
@@ -91,6 +92,9 @@ func main() {
 	startCacheReaper(ctx)
 	startStatsLogger(ctx)
 	startPeeringDBBatcher(ctx)
+	// Non-blocking: a key PeeringDB will not accept must be reported and
+	// dropped, but never delay the listener or keep the service from starting.
+	startPeeringDBKeyCheck(ctx)
 
 	go func() {
 		log.Printf("asn-ipv6-ranges %s listening on %s", build.Version, srv.Addr)

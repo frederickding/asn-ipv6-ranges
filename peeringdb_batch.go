@@ -187,7 +187,7 @@ func runPeeringDBBatch(batch []peeringdbBatchReq) {
 	for i, r := range batch {
 		asns[i] = r.asn
 	}
-	apiKey := getenv(peeringdb.KeyEnv)
+	apiKey := peeringDBAPIKey()
 	names, err := withUpstreamBudget(peeringdb.Host, func() (map[string]string, error) {
 		return orgPeeringDBBatchLookup(ctx, asns, apiKey)
 	})

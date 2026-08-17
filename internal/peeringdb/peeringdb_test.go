@@ -111,6 +111,25 @@ func TestLookupOrgName(t *testing.T) {
 		}
 	})
 
+	// A lookup that hits a rejected key reports it through the same sentinel
+	// VerifyKey uses, so the two paths cannot disagree about what a 401 means.
+	t.Run("rejected key is reported as ErrInvalidKey", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusUnauthorized)
+			io.WriteString(w, `{"meta":{"error":"Invalid API key"}}`)
+		}))
+		defer srv.Close()
+		defer swapAPIBase(t, srv.URL)()
+
+		_, err := LookupOrgName(context.Background(), "2906", "wrong-key")
+		if !errors.Is(err, ErrInvalidKey) {
+			t.Fatalf("got %v, want ErrInvalidKey", err)
+		}
+		if !strings.Contains(err.Error(), "Invalid API key") {
+			t.Errorf("upstream message lost: %v", err)
+		}
+	})
+
 	t.Run("key never appears in a transport error", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 		srv.Close() // refuse connections
@@ -282,6 +301,102 @@ func TestLookupOrgNames(t *testing.T) {
 
 		if _, err := LookupOrgNames(context.Background(), []string{"2906", "3356"}, ""); err == nil {
 			t.Fatal("expected error")
+		}
+	})
+}
+
+func TestVerifyKey(t *testing.T) {
+	// serve stands up a stub answering every request with status and body,
+	// and reports what the last request looked like.
+	serve := func(t *testing.T, status int, body string) (path, auth *string) {
+		t.Helper()
+		var gotPath, gotAuth string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotPath, gotAuth = r.URL.Path, r.Header.Get("Authorization")
+			if status != http.StatusOK {
+				w.WriteHeader(status)
+			}
+			io.WriteString(w, body)
+		}))
+		t.Cleanup(srv.Close)
+		t.Cleanup(swapAPIBase(t, srv.URL))
+		return &gotPath, &gotAuth
+	}
+
+	t.Run("accepted key returns nil", func(t *testing.T) {
+		path, auth := serve(t, http.StatusOK, `{"data":[{"3856":"RADB::AS-PCH"}],"meta":{}}`)
+
+		if err := VerifyKey(context.Background(), "good-key"); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		// The cheapest authenticated GET in the API; a heavier endpoint here
+		// would cost real bytes on every process start.
+		if *path != "/as_set/"+verifyASN {
+			t.Errorf("got path %q, want /as_set/%s", *path, verifyASN)
+		}
+		if *auth != "Api-Key good-key" {
+			t.Errorf("got Authorization %q", *auth)
+		}
+	})
+
+	t.Run("rejected key returns ErrInvalidKey", func(t *testing.T) {
+		for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+			func() {
+				serve(t, status, `{"meta":{"error":"Invalid API key"}}`)
+
+				err := VerifyKey(context.Background(), "wrong-key")
+				if !errors.Is(err, ErrInvalidKey) {
+					t.Fatalf("status %d: got %v, want ErrInvalidKey", status, err)
+				}
+				// The operator needs PeeringDB's own words to know what to fix.
+				if !strings.Contains(err.Error(), "Invalid API key") {
+					t.Errorf("status %d: upstream message lost: %v", status, err)
+				}
+			}()
+		}
+	})
+
+	// The one that protects a working key. Anything short of an explicit
+	// credential rejection is inconclusive, and a caller that treated these as
+	// ErrInvalidKey would disable a good key over a bad minute upstream — or
+	// over PCH someday leaving PeeringDB.
+	t.Run("inconclusive failures are not ErrInvalidKey", func(t *testing.T) {
+		cases := []struct {
+			name   string
+			status int
+			body   string
+		}{
+			{"record gone", http.StatusNotFound, `{"data":[],"meta":{"error":"Entity not found"}}`},
+			{"throttled", http.StatusTooManyRequests, `{"meta":{"error":"Throttled"}}`},
+			{"upstream broken", http.StatusInternalServerError, `<html>oops</html>`},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				serve(t, tc.status, tc.body)
+
+				err := VerifyKey(context.Background(), "good-key")
+				if err == nil {
+					t.Fatal("expected an error")
+				}
+				if errors.Is(err, ErrInvalidKey) {
+					t.Errorf("got ErrInvalidKey for a %d, which says nothing about the key: %v", tc.status, err)
+				}
+			})
+		}
+	})
+
+	t.Run("key never appears in a transport error", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+		srv.Close() // refuse connections
+		defer swapAPIBase(t, srv.URL)()
+
+		const key = "super-secret-key"
+		err := VerifyKey(context.Background(), key)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if strings.Contains(err.Error(), key) {
+			t.Errorf("API key leaked in transport error: %v", err)
 		}
 	})
 }

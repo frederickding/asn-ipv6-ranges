@@ -343,7 +343,7 @@ through both CI systems.
 | `PORT` | `8080` | Port to listen on. The convention used by most serverless container platforms. |
 | `LISTEN_ADDR` | — | Full `host:port` override. Takes precedence over `PORT`. |
 | `CYMRU_DNS_RESOLVER` | `1.1.1.1:53` | Optional. `host:port` of the DNS resolver Team Cymru's ASN zone is queried through. Never required — the default just works. |
-| `PEERINGDB_API_KEY` | — | Optional. Raises PeeringDB's rate limit from 20 to 40 requests/minute; never required for the `org` lookup to work. |
+| `PEERINGDB_API_KEY` | — | Optional. Raises PeeringDB's rate limit from 20 to 40 requests/minute; never required for the `org` lookup to work. Verified once at startup — see [Startup logging](#startup-logging). |
 | `ACCESS_LOG` | `1` | Request logging. Set `0`/`false` to disable. |
 | `ACCESS_LOG_PROBES` | `0` | Include `/-/status` in the access log. Useful when debugging probes. |
 | `MAX_INFLIGHT` | `20` | Concurrent requests held at once. Past it, requests get `503` with `Retry-After` rather than being queued. Sized to the upstream concurrency budgets in [doc/networking.md](doc/networking.md), not to memory — raise it and the container memory limit together anyway, since it is still the front-door bound. |
@@ -368,6 +368,30 @@ So they can be separated with a plain redirect:
 ```bash
 ./asn-ipv6-ranges 1>access.log 2>error.log
 ```
+
+### Startup logging
+
+Before the listener comes up, the service logs the upstreams it will query and
+how they are configured:
+
+```
+data sources: prefixes=whois.radb.net | org=asn.cymru.com (resolver 1.1.1.1:53 (default)), www.peeringdb.com (api key set, verifying), RIR whois, RDAP
+```
+
+No source can be disabled — they are gated by the per-host rate budgets in
+[doc/networking.md](doc/networking.md), not by configuration — so this is an
+inventory, not a list of toggles. It exists so the two things the environment
+can get wrong are visible in a fresh pod's log: the DNS resolver in use, and
+whether `PEERINGDB_API_KEY` was picked up. The key's value is never logged.
+
+If a key is set, a **non-blocking** background check verifies it against
+PeeringDB and logs the result. Only an explicit credential rejection (`401`
+or `403`) drops the key; the process then queries PeeringDB anonymously at the
+lower rate limit for the rest of its life. A timeout, a `5xx`, or any other
+failure is inconclusive and leaves the key in place — discarding a working key
+over one bad minute upstream would be worse, since nothing retries. Either way
+the check is never fatal: PeeringDB does not require a key, so a bad one is a
+reason to warn, not a reason to refuse to serve.
 
 **See [doc/logging.md](doc/logging.md)** for the full picture: the access log
 format and its escaping rules, how the client address is resolved and why it is
@@ -521,6 +545,8 @@ stats.go                       5-minute cache and memory stats (stderr)
 cache.go                       caches, request coalescing, org source resolution, test seams
 limits.go                      inbound concurrency cap (MAX_INFLIGHT)
 upstream.go                    per-registry outbound query budgets
+sources.go                     startup data-source inventory, PeeringDB key verification
+peeringdb_key.go               the one accessor for the PeeringDB key, and its rejection
 peeringdb_batch.go             forced src=peeringdb request batching under concurrency
 asn.go                         ASN parsing and validation
 prefixes.go                    route6 extraction, sorting, aggregation
@@ -540,7 +566,8 @@ doc/caching.md                 eviction bounds, coalescing, and memory per cache
 
 The packages expose narrow APIs — `radb.Query(ctx, asn)`,
 `cymrudns.LookupOrgName(ctx, asn, resolverAddr)`,
-`peeringdb.LookupOrgName(ctx, asn, apiKey)` and `peeringdb.LookupOrgNames(ctx, asns, apiKey)`,
+`peeringdb.LookupOrgName(ctx, asn, apiKey)`, `peeringdb.LookupOrgNames(ctx, asns, apiKey)`
+and `peeringdb.VerifyKey(ctx, apiKey)`,
 `rirwhois.LookupOrgName(ctx, reg, asn)`, `rdap.LookupOrgName(ctx, reg, asn)`,
 and `asnreg.Lookup(asn)` — and the main package
 reaches the network ones through overridable variables, so tests substitute all

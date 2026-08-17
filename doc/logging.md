@@ -98,11 +98,34 @@ Implemented in `stats.go`.
 On stderr, via Go's standard logger:
 
 ```
+2026/08/17 00:59:20 data sources: prefixes=whois.radb.net | org=asn.cymru.com (resolver 1.1.1.1:53 (default)), www.peeringdb.com (api key set, verifying), RIR whois, RDAP
 2026/08/17 00:59:21 asn-ipv6-ranges v1.1.0 listening on :8080
+2026/08/17 00:59:21 www.peeringdb.com: api key verified
 2026/08/17 01:01:23 shutting down
 2026/08/17 01:04:00 cache sweep removed 12 expired entries
 2026/08/17 01:07:14 upstream rdap.lacnic.net rate-limited us, pausing queries until 2026-08-17T01:12:14Z
 ```
+
+The data-sources line is the configuration inventory, logged before the
+listener comes up. No source can be turned off — they are gated by per-host
+rate budgets, not by configuration — so it is not a list of toggles; it exists
+so a fresh pod's log answers the two questions its environment can get wrong:
+which resolver Cymru lookups will use, and whether `PEERINGDB_API_KEY` was
+picked up at all. The key itself is never logged, only its presence.
+
+When a key is set, a background check verifies it and logs one of three
+outcomes (see [networking.md](networking.md) for the endpoint and the rule):
+
+```
+2026/08/17 00:59:21 www.peeringdb.com: api key verified
+2026/08/17 00:59:21 www.peeringdb.com: api key rejected (api key rejected: api returned 401: Invalid API key); it will not be used, continuing anonymously at the lower rate limit
+2026/08/17 00:59:51 www.peeringdb.com: could not verify api key (context deadline exceeded); keeping it and continuing
+```
+
+The rejection line is worth alerting on. Nothing breaks when it appears —
+PeeringDB never requires a key — but it means an operator believes they
+configured something that is not in effect, and it will not be retried until
+the process restarts.
 
 The startup line carries the build, so a log stream alone is enough to tell
 which version was serving at any point — useful for pinning a behaviour change

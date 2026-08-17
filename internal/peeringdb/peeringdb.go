@@ -48,6 +48,19 @@ var apiBase = "https://www.peeringdb.com/api"
 // transport failure with errors.Is.
 var ErrNotFound = errors.New("no organization found")
 
+// ErrInvalidKey reports that PeeringDB rejected the credential rather than the
+// query: the key is one it will not accept, and no retry or different ASN will
+// change that. Distinct from every other failure here because it is the only
+// one that justifies dropping the key for the rest of the process's life.
+var ErrInvalidKey = errors.New("api key rejected")
+
+// verifyASN is the ASN VerifyKey looks up: AS3856, Packet Clearing House. Any
+// stable record would do — the response is discarded — but PCH has been in
+// PeeringDB since the beginning and operates the anycast DNS infrastructure a
+// good part of the root zone runs on, so it is about as unlikely to disappear
+// as a PeeringDB record gets.
+const verifyASN = "3856"
+
 // client is shared across lookups, built once for the same reason as the
 // other HTTP-based adapters in this repo: a per-call client falls back to
 // http.DefaultTransport's two idle connections per host and pays a TLS
@@ -67,6 +80,17 @@ type orgPayload struct {
 		ID   int    `json:"id"`
 		Name string `json:"name"`
 	} `json:"data"`
+	Meta struct {
+		Error string `json:"error"`
+	} `json:"meta"`
+}
+
+// asSetPayload decodes /as_set/<asn>, whose data is a list of one
+// ASN-to-AS-SET-name map. VerifyKey never looks at it — the type exists only
+// because get needs somewhere to put the body and something to read
+// meta.error from.
+type asSetPayload struct {
+	Data []map[string]string `json:"data"`
 	Meta struct {
 		Error string `json:"error"`
 	} `json:"meta"`
@@ -116,6 +140,15 @@ func get(ctx context.Context, path string, query url.Values, apiKey string, dst 
 	jsonErr := json.Unmarshal(body, dst)
 
 	if resp.StatusCode != http.StatusOK {
+		// The credential was refused, not the query. Reported through a
+		// sentinel so a caller can stop sending a key that will never work,
+		// while every other status stays an ordinary, retryable failure.
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			if msg := dst.metaError(); msg != "" {
+				return fmt.Errorf("%w: api returned %d: %s", ErrInvalidKey, resp.StatusCode, msg)
+			}
+			return fmt.Errorf("%w: api returned %d", ErrInvalidKey, resp.StatusCode)
+		}
 		if msg := dst.metaError(); msg != "" {
 			return fmt.Errorf("api returned %d: %s", resp.StatusCode, msg)
 		}
@@ -124,8 +157,31 @@ func get(ctx context.Context, path string, query url.Values, apiKey string, dst 
 	return jsonErr
 }
 
-func (p *orgPayload) metaError() string { return p.Meta.Error }
-func (p *netPayload) metaError() string { return p.Meta.Error }
+func (p *orgPayload) metaError() string   { return p.Meta.Error }
+func (p *netPayload) metaError() string   { return p.Meta.Error }
+func (p *asSetPayload) metaError() string { return p.Meta.Error }
+
+// VerifyKey reports whether PeeringDB accepts apiKey, by making the smallest
+// authenticated request the API offers: /as_set/<asn> for one stable ASN,
+// which answers in 48 bytes. Callers use it to find out at startup — rather
+// than on the first user request — that a configured key is unusable.
+//
+// PeeringDB evaluates the credential before the lookup (a bad key against a
+// nonexistent ASN returns 401, not 404), so the record's content is
+// irrelevant and is discarded. That is what makes the error contract here
+// safe to act on:
+//
+//   - nil means the key was accepted.
+//   - ErrInvalidKey means it was refused, and will keep being refused.
+//   - anything else — a 404 if PCH ever leaves PeeringDB, a 5xx, a timeout —
+//     is inconclusive and says nothing about the key.
+//
+// A caller that disables the key on any error rather than on ErrInvalidKey
+// alone would throw away a perfectly good key over one bad minute upstream.
+func VerifyKey(ctx context.Context, apiKey string) error {
+	var payload asSetPayload
+	return get(ctx, "/as_set/"+verifyASN, nil, apiKey, &payload)
+}
 
 // LookupOrgName resolves the organization name for a single ASN (decimal, no
 // "AS" prefix). apiKey may be empty, in which case the request is anonymous.

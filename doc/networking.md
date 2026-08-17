@@ -136,6 +136,36 @@ The organization name is the `data[0].name` field. An optional
 a URL parameter, so unlike WhoisFreaks previously, the key cannot leak into a
 transport error and needs no redaction.
 
+**Key verification at startup.** A wrong or expired key is worse than no key:
+every lookup still succeeds — the key only raises a rate limit — while
+`budgetFor` sees a non-empty key and selects the authenticated 15/min budget
+for a process with no working credential. That is how this service would start
+over-querying PeeringDB with nothing visibly broken.
+
+So when `PEERINGDB_API_KEY` is set, `startPeeringDBKeyCheck` (`sources.go`)
+verifies it once, in a goroutine, through the same per-host budget as every
+other outbound call:
+
+```
+GET https://www.peeringdb.com/api/as_set/3856      →  48 bytes
+{"data": [{"3856": "RADB::AS-PCH"}], "meta": {}}
+```
+
+The smallest authenticated `GET` the API offers — `/api/net?asn=…` is 142
+bytes — for AS3856 (Packet Clearing House), chosen only because its record is
+about as stable as PeeringDB records get. The response is discarded:
+PeeringDB evaluates the credential *before* the lookup (a bad key against a
+nonexistent ASN returns `401`, not `404`, confirmed against the live API), so
+the status alone settles the question.
+
+Only `peeringdb.ErrInvalidKey` — `401` or `403` — drops the key. The rejection
+sets a process-wide flag read by `peeringDBAPIKey()`, which every call site
+goes through instead of reading the environment, and calls `forgetLimiter` so
+the cached `www.peeringdb.com` limiter is rebuilt at the anonymous 6/min rate
+rather than keeping the authenticated one. A `404`, a `5xx`, or a timeout is
+inconclusive and leaves the key alone; nothing retries, so disabling a good key
+on a transient failure would cost the higher rate limit until the next restart.
+
 **Batching (forced `src=peeringdb` only):** `/api/org` has no real `asn`
 field — `asn=<n>` is a special single-value filter, and `asn__in` silently
 ignores the list and returns PeeringDB's entire ~34,000-row org table instead
@@ -277,7 +307,7 @@ burst depth) **and** a concurrency ceiling, because the registries limit both.
 | ARIN, APNIC, AFRINIC | 2/s | 5 | 2 | No published number, so low enough not to be noticed. |
 | Team Cymru DNS zone | 20/s | 40 | 8 | Built for high-volume bulk lookups, so it can run far looser than everything else here — see `cymruBudget`'s comment in `upstream.go`. |
 | PeeringDB, anonymous | 6/min | 3 | 1 | Well under the documented 20/min, leaving headroom for the two-replica default and any other client sharing the egress IP. |
-| PeeringDB, keyed | 15/min | 5 | 2 | Well under the documented 40/min the key unlocks. Selected automatically once `PEERINGDB_API_KEY` is set — see `budgetFor` in `upstream.go`. |
+| PeeringDB, keyed | 15/min | 5 | 2 | Well under the documented 40/min the key unlocks. Selected automatically once `PEERINGDB_API_KEY` is set — see `budgetFor` in `upstream.go`. A key the startup check finds invalid drops back to the anonymous row above. |
 
 A registry's whois and RDAP front ends share one budget: they are the same
 service behind two protocols, and per-registry is how the registries themselves
