@@ -227,7 +227,7 @@ curl http://localhost:8080/-/status
 ok
 # uptime: 38s
 # prefix cache: 1/256 ASNs
-# org cache: 0/256 entries
+# org cache: 0/512 entries
 ```
 
 The cache lines are reported against capacity: a cache sitting at its limit
@@ -354,67 +354,60 @@ not an authorization signal, what is excluded and why, the fields in the
 
 ## Caching
 
-Successful WHOIS lookups are cached in memory for 5 minutes per ASN, so repeated
-queries don't hit the upstream registry and risk rate limiting. Failed lookups
-are cached too, but only for 30 seconds: long enough that an ASN nobody can
-resolve can't be replayed into one upstream query per request, short enough that
-a transient outage doesn't lock out retries for the full 5 minutes.
+Two independent in-memory caches, since prefixes and organization names change
+on very different timescales:
 
-The cache stores the un-aggregated prefix list and aggregation is applied when
-rendering, so `agg=0` and `agg=1` share a single upstream query. Organization
-names are cached separately on the same 5-minute TTL, since the API is metered
-and registry servers rate-limit. That cache is keyed by the requested `src` as
-well as the ASN, so a `src=rdap` answer is never served to an `auto` request, or
-vice versa — the reported source is always the one that actually answered.
+| Cache | Freshness (TTL) | Freshness, failures | Retention (max age) | Capacity |
+| --- | --- | --- | --- | --- |
+| Prefixes | 5 minutes | 30 seconds | 1 hour | 256 ASNs |
+| Organization names | 6 hours | 30 seconds | 3 days | 512 entries |
 
-Concurrent first-time requests for the same uncached ASN are coalesced: 50
-simultaneous requests for one cold ASN produce a single upstream query, and the
-other 49 wait for its result. This is what keeps the upstream query rate tied to
-the number of distinct ASNs rather than the number of requests — see
-[doc/networking.md](doc/networking.md) for how it fits with the per-registry
-rate limits.
+Prefixes are cached because a WHOIS query costs an upstream round trip and
+risks the registry's rate limit; 5 minutes matches how often an ASN's
+announcements can plausibly change. The cache stores the un-aggregated prefix
+list, so `agg=0` and `agg=1` share one upstream query. Organization names get
+a much longer TTL because they don't move on that timescale at all — an ASN's
+registered organization is typically stable for years — so 6 hours cuts
+upstream traffic against the metered API and rate-limited registries without
+ever serving a meaningfully stale answer. That cache is keyed by the requested
+`src` as well as the ASN, so a `src=rdap` answer is never served to an `auto`
+request, or vice versa.
 
-### Eviction and bounds
+A failed lookup is cached too, but only for 30 seconds either way: long
+enough that an ASN nobody can resolve can't be replayed into one upstream
+query per request, short enough that a transient outage doesn't lock out
+retries for hours.
 
-Three separate limits apply, and they do different jobs:
+Concurrent first-time requests for the same uncached key are coalesced: 50
+simultaneous requests for one cold ASN produce a single upstream query, and
+the other 49 wait for its result. This is what keeps the upstream query rate
+tied to the number of distinct ASNs rather than the number of requests.
 
-| Limit | Value | Effect |
-| --- | --- | --- |
-| Freshness | 5 minutes | Past this an entry is re-queried upstream rather than served. |
-| Freshness, failures | 30 seconds | A cached failure is retried sooner than a cached answer is refreshed. |
-| Retention | 1 hour | Past this an entry is **deleted**. Only entries nobody has successfully refreshed get this old, so this reclaims ASNs queried once and never again. |
-| Capacity | 256 entries | Hard cap per cache. At capacity, the least recently refreshed entry is evicted to make room. |
-
-Pruning runs on every insert, and a reaper sweeps both caches once a minute so
-retention still holds when the service is idle and no insert is happening —
-otherwise a pod that went quiet would hold its last 256 entries indefinitely.
-
-Both caches are bounded. The org cache is keyed by `{asn, src}`, so a single ASN
-can occupy up to four of its slots.
+**See [doc/caching.md](doc/caching.md)** for why three separate bounds exist
+per cache, the eviction and coalescing mechanics, and the per-cache memory
+measurements — and [doc/networking.md](doc/networking.md) for how this fits
+the per-registry rate limits.
 
 ### Memory
 
-The caps exist to make memory a fixed ceiling rather than something that grows
-with the number of distinct ASNs ever queried. Measured:
+`MAX_INFLIGHT` (32 by default) and the per-response body cap are what bound
+memory from concurrent requests, independent of anything cached. Measured:
 
 | Scenario | RSS |
 | --- | --- |
 | Idle | 8 MB |
-| 256 cached ASNs, 50 IPv6 prefixes each (typical) | ~9 MB |
-| 256 cached ASNs, 2000 prefixes each (far beyond any real ASN) | 51 MB |
 | 64 concurrent requests for a 2.3 MB upstream response | 29 MB |
 
-Concurrency is capped at `MAX_INFLIGHT` (32 by default), so the last row is a
-measurement of twice what the service will now hold at once. A single RADB
+The last row is twice what the service will now hold at once. A single RADB
 response is separately capped at 8 MiB, so concurrency cannot spike without
-bound. That cap is enforced rather than truncating: the largest
-real responses measured are 1.12 MB (AS3356) and 2.43 MB (AS4134), and a
-response over the cap returns an error instead of a silently shortened prefix
-list.
+bound. That cap is enforced rather than truncating: the largest real
+responses measured are 1.12 MB (AS3356) and 2.43 MB (AS4134), and a response
+over the cap returns an error instead of a silently shortened prefix list.
 
 The supplied Kubernetes manifest sets `limits.memory: 96Mi` with
 `GOMEMLIMIT=80MiB`, so the Go GC works harder as it approaches the ceiling
-instead of the pod being OOM-killed.
+instead of the pod being OOM-killed. See [doc/caching.md](doc/caching.md#memory)
+for how the cache capacities themselves contribute to that ceiling.
 
 ## Responses
 
@@ -500,6 +493,7 @@ internal/ratelimit/            token bucket + concurrency ceiling per upstream
 doc/networking.md              ports, egress, upstream rate limits and budgets
 doc/logging.md                 access log format, stats line, operational lines
 doc/version.md                 how the version string is stamped in and reported
+doc/caching.md                 eviction bounds, coalescing, and memory per cache
 ```
 
 The packages expose narrow APIs — `radb.Query(ctx, asn)`,

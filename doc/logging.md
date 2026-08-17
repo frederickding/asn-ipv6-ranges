@@ -74,12 +74,12 @@ Implemented in `accesslog.go`.
 Every 5 minutes, plus once at startup for a baseline, to stderr:
 
 ```
-2026/08/16 23:35:10 cache prefix=2/256 org=0/256 | mem heap=8.2MiB sys=35.2MiB rss=26.9MiB limit=80.0MiB gc=9
+2026/08/16 23:35:10 cache prefix=2/256 org=0/512 | mem heap=8.2MiB sys=35.2MiB rss=26.9MiB limit=80.0MiB gc=9
 ```
 
 | Field | Meaning |
 | --- | --- |
-| `prefix`, `org` | Cache occupancy against the 256-entry cap. A cache pinned at its limit means entries are being evicted. |
+| `prefix`, `org` | Cache occupancy against each cache's own capacity — 256 for prefixes, 512 for organization names. A cache pinned at its limit means entries are being evicted; see [doc/caching.md](caching.md). |
 | `heap` | Live heap (`HeapAlloc`). |
 | `sys` | Total memory obtained from the OS. |
 | `rss` | Resident set size, from `/proc/self/status`. This is what the kernel OOM-kills on and what a container memory limit governs; `heap` alone understates it. Omitted where `/proc` is unavailable. |

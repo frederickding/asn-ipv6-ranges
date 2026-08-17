@@ -240,9 +240,13 @@ The budgets are the last line, not the first. Three things sit in front:
 1. **ASN validation.** An ASN outside every IANA-delegated range is rejected
    with `400` before any network call. Scanning the unallocated AS space
    generates no upstream traffic at all.
-2. **Caching.** Successful answers are cached for 5 minutes; failures for 30
-   seconds. Without the negative cache, an ASN whose lookup fails could be
-   replayed into one upstream query per request indefinitely.
+2. **Caching.** Prefix lookups are cached for 5 minutes; organization names
+   for 6 hours, since they change on the timescale of ASN reassignment, not
+   minutes — a longer TTL here is itself a mitigation against the tightly-
+   budgeted registries above. Failures are cached for 30 seconds either way.
+   Without the negative cache, an ASN whose lookup fails could be replayed
+   into one upstream query per request indefinitely. See
+   [doc/caching.md](caching.md) for the full mechanics.
 3. **Coalescing.** Concurrent requests for the same uncached ASN are collapsed
    into a single upstream query — 50 simultaneous requests for one cold ASN cost
    one query, not 50. This is what makes the budgets meaningful: without it the

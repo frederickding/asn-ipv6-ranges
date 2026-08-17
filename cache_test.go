@@ -61,7 +61,7 @@ func TestGetPrefixesCaching(t *testing.T) {
 		t.Errorf("cached timestamp changed: %v -> %v", t0, t1)
 	}
 
-	clock = clock.Add(cacheTTL)
+	clock = clock.Add(prefixCacheTTL)
 	_, t2, err := getPrefixes(context.Background(), "2906")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -75,7 +75,7 @@ func TestGetPrefixesCaching(t *testing.T) {
 }
 
 // TestCacheEvictsPastMaxAge covers the retention rule: an entry that nobody has
-// refreshed within cacheMaxAge is deleted, not merely ignored.
+// refreshed within prefixCacheMaxAge is deleted, not merely ignored.
 func TestCacheEvictsPastMaxAge(t *testing.T) {
 	clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 	swapTestHooks(t, &clock, func(string) (string, error) { return sampleWhois, nil })
@@ -88,12 +88,12 @@ func TestCacheEvictsPastMaxAge(t *testing.T) {
 	}
 
 	// Just short of the limit, the cold entry is still retained.
-	clock = clock.Add(cacheMaxAge - time.Minute)
+	clock = clock.Add(prefixCacheMaxAge - time.Minute)
 	if _, _, err := getPrefixes(context.Background(), "24940"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !cacheHas("2906") {
-		t.Error("entry younger than cacheMaxAge was evicted")
+		t.Error("entry younger than prefixCacheMaxAge was evicted")
 	}
 
 	// Past it, the next insert reaps it.
@@ -102,7 +102,7 @@ func TestCacheEvictsPastMaxAge(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if cacheHas("2906") {
-		t.Error("entry older than cacheMaxAge should have been deleted")
+		t.Error("entry older than prefixCacheMaxAge should have been deleted")
 	}
 	if !cacheHas("24940") {
 		t.Error("younger entry should have survived")
@@ -110,29 +110,29 @@ func TestCacheEvictsPastMaxAge(t *testing.T) {
 }
 
 // TestCacheRespectsMaxEntries is the memory bound: the map must never exceed
-// cacheMaxEntries no matter how many distinct ASNs are queried.
+// prefixCacheMaxEntries no matter how many distinct ASNs are queried.
 func TestCacheRespectsMaxEntries(t *testing.T) {
 	clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 	swapTestHooks(t, &clock, func(string) (string, error) { return sampleWhois, nil })
 
-	for i := range cacheMaxEntries * 2 {
+	for i := range prefixCacheMaxEntries * 2 {
 		// Advance the clock so recency is well defined, but stay inside
-		// cacheMaxAge so this exercises capacity eviction rather than age.
+		// prefixCacheMaxAge so this exercises capacity eviction rather than age.
 		clock = clock.Add(time.Second)
 		if _, _, err := getPrefixes(context.Background(), strconv.Itoa(1000+i)); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if n := cacheLen(); n > cacheMaxEntries {
-			t.Fatalf("after %d inserts the cache holds %d entries, over the %d cap", i+1, n, cacheMaxEntries)
+		if n := cacheLen(); n > prefixCacheMaxEntries {
+			t.Fatalf("after %d inserts the cache holds %d entries, over the %d cap", i+1, n, prefixCacheMaxEntries)
 		}
 	}
 
-	if n := cacheLen(); n != cacheMaxEntries {
-		t.Errorf("cache holds %d entries, want it filled to %d", n, cacheMaxEntries)
+	if n := cacheLen(); n != prefixCacheMaxEntries {
+		t.Errorf("cache holds %d entries, want it filled to %d", n, prefixCacheMaxEntries)
 	}
 
 	// The oldest go first, so the most recent inserts must all be present.
-	for i := cacheMaxEntries; i < cacheMaxEntries*2; i++ {
+	for i := prefixCacheMaxEntries; i < prefixCacheMaxEntries*2; i++ {
 		if !cacheHas(strconv.Itoa(1000 + i)) {
 			t.Errorf("recent entry AS%d was evicted before older ones", 1000+i)
 		}
@@ -152,7 +152,7 @@ func TestCacheKeepsTheEntryJustWritten(t *testing.T) {
 	// Fill to capacity with entries that all share a timestamp, so the new
 	// entry cannot win eviction on recency alone.
 	cacheMu.Lock()
-	for i := range cacheMaxEntries {
+	for i := range prefixCacheMaxEntries {
 		cache[strconv.Itoa(5000+i)] = cacheEntry{queriedAt: clock}
 	}
 	cacheMu.Unlock()
@@ -163,13 +163,15 @@ func TestCacheKeepsTheEntryJustWritten(t *testing.T) {
 	if !cacheHas("2906") {
 		t.Error("the entry just fetched was evicted immediately")
 	}
-	if n := cacheLen(); n != cacheMaxEntries {
-		t.Errorf("cache holds %d entries, want %d", n, cacheMaxEntries)
+	if n := cacheLen(); n != prefixCacheMaxEntries {
+		t.Errorf("cache holds %d entries, want %d", n, prefixCacheMaxEntries)
 	}
 }
 
 // TestSweepCachesReapsWhenIdle covers the case inserts cannot: a pod with no
-// traffic must still release entries past cacheMaxAge.
+// traffic must still release entries past their cache's max age. The two
+// caches' max ages differ, so the clock advances past the longer of the two
+// (the org cache's) to confirm both get reaped in the same sweep.
 func TestSweepCachesReapsWhenIdle(t *testing.T) {
 	clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 	swapTestHooks(t, &clock, func(string) (string, error) { return sampleWhois, nil })
@@ -185,7 +187,7 @@ func TestSweepCachesReapsWhenIdle(t *testing.T) {
 	}
 
 	// No further requests arrive; only the sweep runs.
-	clock = clock.Add(cacheMaxAge + time.Minute)
+	clock = clock.Add(orgCacheMaxAge + time.Minute)
 	if n := sweepCaches(clock); n != 2 {
 		t.Errorf("sweep removed %d entries, want 2", n)
 	}
@@ -215,25 +217,25 @@ func TestOrgCacheRespectsMaxEntries(t *testing.T) {
 	swapTestHooks(t, &clock, func(string) (string, error) { return sampleWhois, nil })
 	orgRIRLookup = func(_ context.Context, _ asnreg.Registry, asn string) (string, error) { return "Org " + asn, nil }
 
-	for i := range cacheMaxEntries * 2 {
+	for i := range orgCacheMaxEntries * 2 {
 		clock = clock.Add(time.Second)
 		asn := strconv.Itoa(1000 + i)
 		if _, err := getOrgName(context.Background(), asn, uint64(1000+i), srcWHOIS); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if n := orgCacheLen(); n > cacheMaxEntries {
-			t.Fatalf("org cache holds %d entries, over the %d cap", n, cacheMaxEntries)
+		if n := orgCacheLen(); n > orgCacheMaxEntries {
+			t.Fatalf("org cache holds %d entries, over the %d cap", n, orgCacheMaxEntries)
 		}
 	}
-	if n := orgCacheLen(); n != cacheMaxEntries {
-		t.Errorf("org cache holds %d entries, want %d", n, cacheMaxEntries)
+	if n := orgCacheLen(); n != orgCacheMaxEntries {
+		t.Errorf("org cache holds %d entries, want %d", n, orgCacheMaxEntries)
 	}
 }
 
 // TestGetPrefixesCachesErrorsBriefly is the bound on failure traffic: an ASN
 // that cannot be resolved must not be replayable into one upstream query per
 // request. The failure is remembered, but only for failureTTL, so a transient
-// outage does not lock out retries for the full cacheTTL.
+// outage does not lock out retries for the full prefixCacheTTL.
 func TestGetPrefixesCachesErrorsBriefly(t *testing.T) {
 	clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 	calls := 0
@@ -260,9 +262,10 @@ func TestGetPrefixesCachesErrorsBriefly(t *testing.T) {
 		t.Errorf("a failure older than failureTTL must be retried, got %d upstream calls", calls)
 	}
 
-	// ...but not for the whole cacheTTL, which is what a successful answer gets.
-	if failureTTL >= cacheTTL {
-		t.Errorf("failureTTL %s must be shorter than cacheTTL %s", failureTTL, cacheTTL)
+	// ...but not for the whole prefixCacheTTL, which is what a successful
+	// answer gets.
+	if failureTTL >= prefixCacheTTL {
+		t.Errorf("failureTTL %s must be shorter than prefixCacheTTL %s", failureTTL, prefixCacheTTL)
 	}
 }
 
@@ -293,6 +296,49 @@ func TestGetPrefixesDoesNotCacheCancellations(t *testing.T) {
 	}
 	if calls != 2 {
 		t.Errorf("got %d upstream calls, want 2", calls)
+	}
+}
+
+// TestOrgCacheOutlivesPrefixCacheTTL is the point of splitting the two caches'
+// bounds apart: an org name must still be served from cache well past the
+// point where a prefix list for the same ASN would have gone stale.
+func TestOrgCacheOutlivesPrefixCacheTTL(t *testing.T) {
+	clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	swapTestHooks(t, &clock, func(string) (string, error) { return sampleWhois, nil })
+	orgCalls := 0
+	orgRIRLookup = func(context.Context, asnreg.Registry, string) (string, error) {
+		orgCalls++
+		return "Netflix", nil
+	}
+
+	if _, _, err := getPrefixes(context.Background(), "2906"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, err := getOrgName(context.Background(), "2906", 2906, srcWHOIS); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if orgCalls != 1 {
+		t.Fatalf("expected 1 org lookup, got %d", orgCalls)
+	}
+
+	// Past the prefix TTL, short of the org TTL.
+	clock = clock.Add(prefixCacheTTL + time.Second)
+	if prefixCacheTTL >= orgCacheTTL {
+		t.Fatalf("prefixCacheTTL %s must be shorter than orgCacheTTL %s for this test to mean anything", prefixCacheTTL, orgCacheTTL)
+	}
+
+	if entry, ok := lookupPrefixCache("2906"); ok {
+		t.Errorf("prefix entry is still considered fresh after prefixCacheTTL: %+v", entry)
+	}
+	if _, ok := lookupOrgCache(orgCacheKey{asn: "2906", src: srcWHOIS}); !ok {
+		t.Error("org entry went stale before orgCacheTTL elapsed")
+	}
+
+	if _, err := getOrgName(context.Background(), "2906", 2906, srcWHOIS); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if orgCalls != 1 {
+		t.Errorf("org name was re-queried before orgCacheTTL elapsed, got %d calls", orgCalls)
 	}
 }
 

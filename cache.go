@@ -19,26 +19,40 @@ import (
 	"asn-ipv6-ranges/internal/whoisfreaks"
 )
 
-// Cache bounds. These are three separate limits, and it is worth keeping them
-// distinct:
+// Cache bounds. For each cache these are three separate limits, and it is
+// worth keeping them distinct:
 //
-//   - cacheTTL is freshness: past it, an entry is re-queried upstream rather
-//     than served.
-//   - cacheMaxAge is retention: past it, an entry is deleted outright. Only
+//   - TTL is freshness: past it, an entry is re-queried upstream rather than
+//     served.
+//   - MaxAge is retention: past it, an entry is deleted outright. Only
 //     entries nobody has successfully refreshed reach this age, so it is what
-//     reclaims ASNs that were queried once and never again.
-//   - cacheMaxEntries is capacity, the hard bound on memory. Without it the
-//     maps grew with the number of distinct ASNs ever queried, so a scan of the
+//     reclaims ASNs that were queried once and never again. It must stay
+//     above TTL — retention below freshness would delete an entry before it
+//     ever goes stale, forcing a needless re-query.
+//   - MaxEntries is capacity, the hard bound on memory. Without it the maps
+//     grew with the number of distinct ASNs ever queried, so a scan of the
 //     ASN space was an unbounded allocation.
-//   - failureTTL is how long a failed lookup is remembered. Without it, an ASN
-//     whose upstream answer is broken — or an ASN chosen precisely because it
-//     fails — is re-queried on every single request, so inbound rate becomes
-//     upstream rate with the cache contributing nothing.
+//
+// The prefix and org caches use different values for all three: an ASN's
+// announced prefixes can change at any time, but its registered organization
+// changes on the timescale of ASN reassignment — years, not minutes — so the
+// org cache can hold answers far longer, which is also fewer queries against
+// the tightly-budgeted registries in doc/networking.md. See doc/caching.md.
+//
+// failureTTL is how long a failed lookup is remembered, shared by both
+// caches. Without it, an ASN whose upstream answer is broken — or an ASN
+// chosen precisely because it fails — is re-queried on every single request,
+// so inbound rate becomes upstream rate with the cache contributing nothing.
 const (
-	cacheTTL        = 5 * time.Minute
-	cacheMaxAge     = time.Hour
-	cacheMaxEntries = 256
-	failureTTL      = 30 * time.Second
+	prefixCacheTTL        = 5 * time.Minute
+	prefixCacheMaxAge     = time.Hour
+	prefixCacheMaxEntries = 256
+
+	orgCacheTTL        = 6 * time.Hour
+	orgCacheMaxAge     = 72 * time.Hour
+	orgCacheMaxEntries = 512
+
+	failureTTL = 30 * time.Second
 )
 
 // Org sources, as selected by the src request parameter.
@@ -170,11 +184,13 @@ type cacheEntry struct {
 // than results: they are cached to stop repeat upstream queries, not because
 // they are worth keeping.
 func (e cacheEntry) fresh(now time.Time) bool {
-	return isFresh(e.queriedAt, e.err, now)
+	return isFresh(e.queriedAt, e.err, prefixCacheTTL, now)
 }
 
-func isFresh(at time.Time, err error, now time.Time) bool {
-	ttl := cacheTTL
+// isFresh reports whether an entry queried at at is still servable without a
+// re-query. A failed lookup uses the shared, much shorter failureTTL instead
+// of the cache's own ttl, regardless of which cache is asking.
+func isFresh(at time.Time, err error, ttl time.Duration, now time.Time) bool {
 	if err != nil {
 		ttl = failureTTL
 	}
@@ -203,7 +219,7 @@ type orgCacheEntry struct {
 }
 
 func (e orgCacheEntry) fresh(now time.Time) bool {
-	return isFresh(e.fetchedAt, e.err, now)
+	return isFresh(e.fetchedAt, e.err, orgCacheTTL, now)
 }
 
 var (
@@ -216,27 +232,27 @@ var (
 	orgCache   = make(map[orgCacheKey]orgCacheEntry)
 )
 
-// pruneLocked enforces cacheMaxAge and cacheMaxEntries on a cache map. It runs
-// after an insert, and the caller must hold the write lock.
+// pruneLocked enforces maxAge and maxEntries on a cache map. It runs after an
+// insert, and the caller must hold the write lock.
 //
 // keep names the entry just written, which is exempt: having just paid for an
 // upstream query, discarding its result immediately would be pointless work.
 //
 // Sweeping on write rather than from a background goroutine keeps the cache
 // free of a lifecycle to start, stop, and synchronize in tests. The cost is
-// bounded by cacheMaxEntries, so it is a scan of at most a few hundred entries
-// on a path that has just done network I/O.
-func pruneLocked[K comparable, V any](m map[K]V, keep K, timestamp func(V) time.Time, now time.Time) {
+// bounded by maxEntries, so it is a scan of at most a few hundred entries on a
+// path that has just done network I/O.
+func pruneLocked[K comparable, V any](m map[K]V, keep K, timestamp func(V) time.Time, now time.Time, maxAge time.Duration, maxEntries int) {
 	for k, v := range m {
-		if k != keep && now.Sub(timestamp(v)) >= cacheMaxAge {
+		if k != keep && now.Sub(timestamp(v)) >= maxAge {
 			delete(m, k)
 		}
 	}
 
 	// Still over capacity: drop the least recently refreshed. Entries are
-	// rewritten whenever a request refreshes them past cacheTTL, so the oldest
-	// timestamp identifies the coldest ASN.
-	for len(m) > cacheMaxEntries {
+	// rewritten whenever a request refreshes them past their TTL, so the
+	// oldest timestamp identifies the coldest ASN.
+	for len(m) > maxEntries {
 		var oldestKey K
 		var oldestAt time.Time
 		found := false
@@ -258,12 +274,13 @@ func pruneLocked[K comparable, V any](m map[K]V, keep K, timestamp func(V) time.
 // sweepInterval is how often idle caches are reaped.
 const sweepInterval = time.Minute
 
-// sweepCaches deletes entries past cacheMaxAge from both caches and reports how
-// many went.
+// sweepCaches deletes entries past their cache's max age from both caches and
+// reports how many went.
 //
 // Inserts prune as they go, which covers a pod that is serving traffic. This
 // exists for the idle case: with no requests arriving there is no insert to
-// trigger a prune, so a pod that goes quiet would hold its last 256 entries
+// trigger a prune, so a pod that goes quiet would hold its last entries —
+// up to prefixCacheMaxEntries and orgCacheMaxEntries respectively —
 // indefinitely. Retention should not depend on someone making a request.
 func sweepCaches(now time.Time) int {
 	before := 0
@@ -271,13 +288,13 @@ func sweepCaches(now time.Time) int {
 	// is always a canonicalized decimal string, never empty.
 	cacheMu.Lock()
 	before += len(cache)
-	pruneLocked(cache, "", func(e cacheEntry) time.Time { return e.queriedAt }, now)
+	pruneLocked(cache, "", func(e cacheEntry) time.Time { return e.queriedAt }, now, prefixCacheMaxAge, prefixCacheMaxEntries)
 	after := len(cache)
 	cacheMu.Unlock()
 
 	orgCacheMu.Lock()
 	before += len(orgCache)
-	pruneLocked(orgCache, orgCacheKey{}, func(e orgCacheEntry) time.Time { return e.fetchedAt }, now)
+	pruneLocked(orgCache, orgCacheKey{}, func(e orgCacheEntry) time.Time { return e.fetchedAt }, now, orgCacheMaxAge, orgCacheMaxEntries)
 	after += len(orgCache)
 	orgCacheMu.Unlock()
 
@@ -346,7 +363,7 @@ func getPrefixes(ctx context.Context, asn string) ([]netip.Prefix, time.Time, er
 
 		cacheMu.Lock()
 		cache[asn] = entry
-		pruneLocked(cache, asn, func(e cacheEntry) time.Time { return e.queriedAt }, entry.queriedAt)
+		pruneLocked(cache, asn, func(e cacheEntry) time.Time { return e.queriedAt }, entry.queriedAt, prefixCacheMaxAge, prefixCacheMaxEntries)
 		cacheMu.Unlock()
 		return entry, err
 	})
@@ -386,10 +403,12 @@ func getOrgName(ctx context.Context, asn string, v uint64, src string) (orgResul
 		entry := orgCacheEntry{result: result, err: err, fetchedAt: nowFunc()}
 		orgCacheMu.Lock()
 		orgCache[key] = entry
-		// Bounded on the same terms. Entries here are far smaller than a prefix
-		// list, but an unbounded map is an unbounded map, and this one is keyed
-		// by {asn, src} so a single ASN can occupy up to four slots.
-		pruneLocked(orgCache, key, func(e orgCacheEntry) time.Time { return e.fetchedAt }, entry.fetchedAt)
+		// Bounded on the same terms as the prefix cache, but with its own
+		// longer-lived TTL/max-age and larger capacity — see the constants
+		// above. Entries here are far smaller than a prefix list, but an
+		// unbounded map is an unbounded map, and this one is keyed by
+		// {asn, src} so a single ASN can occupy up to four slots.
+		pruneLocked(orgCache, key, func(e orgCacheEntry) time.Time { return e.fetchedAt }, entry.fetchedAt, orgCacheMaxAge, orgCacheMaxEntries)
 		orgCacheMu.Unlock()
 		return entry, err
 	})

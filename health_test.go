@@ -43,7 +43,7 @@ func TestStatusHandler(t *testing.T) {
 	if !strings.Contains(body, "# uptime: 1m30s") {
 		t.Errorf("missing or wrong uptime in:\n%s", body)
 	}
-	for _, want := range []string{"# prefix cache: 0/256 ASNs", "# org cache: 0/256 entries"} {
+	for _, want := range []string{"# prefix cache: 0/256 ASNs", "# org cache: 0/512 entries"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("missing %q in:\n%s", want, body)
 		}

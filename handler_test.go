@@ -413,7 +413,7 @@ func TestASHandlerOrgSources(t *testing.T) {
 			t.Errorf("auto request served the forced answer:\n%s", body)
 		}
 
-		clock = clock.Add(cacheTTL + time.Second)
+		clock = clock.Add(orgCacheTTL + time.Second)
 		get("?org=1")
 		if apiCalls != 2 {
 			t.Errorf("expected refresh after TTL, got %d API calls", apiCalls)

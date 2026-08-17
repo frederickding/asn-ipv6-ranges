@@ -92,7 +92,7 @@ func mib(b uint64) string {
 func statsLine(m memSnapshot, prefixN, orgN int) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "cache prefix=%d/%d org=%d/%d | mem heap=%s sys=%s",
-		prefixN, cacheMaxEntries, orgN, cacheMaxEntries, mib(m.heap), mib(m.sys))
+		prefixN, prefixCacheMaxEntries, orgN, orgCacheMaxEntries, mib(m.heap), mib(m.sys))
 	if m.rss > 0 {
 		fmt.Fprintf(&b, " rss=%s", mib(m.rss))
 	}

@@ -25,19 +25,19 @@ func TestStatsLine(t *testing.T) {
 				limit: 83_886_080, // 80.0 MiB
 				numGC: 7,
 			},
-			want: "cache prefix=12/256 org=3/256 | mem heap=4.2MiB sys=18.1MiB rss=12.0MiB limit=80.0MiB gc=7",
+			want: "cache prefix=12/256 org=3/512 | mem heap=4.2MiB sys=18.1MiB rss=12.0MiB limit=80.0MiB gc=7",
 		},
 		{
 			// Non-Linux, or /proc unreadable: the field is omitted rather than
 			// reported as zero.
 			name: "rss omitted when unavailable",
 			mem:  memSnapshot{heap: 4_404_019, sys: 18_979_224, limit: 83_886_080, numGC: 7},
-			want: "cache prefix=12/256 org=3/256 | mem heap=4.2MiB sys=18.1MiB limit=80.0MiB gc=7",
+			want: "cache prefix=12/256 org=3/512 | mem heap=4.2MiB sys=18.1MiB limit=80.0MiB gc=7",
 		},
 		{
 			name: "limit omitted when GOMEMLIMIT is unset",
 			mem:  memSnapshot{heap: 4_404_019, sys: 18_979_224, rss: 12_582_912, numGC: 7},
-			want: "cache prefix=12/256 org=3/256 | mem heap=4.2MiB sys=18.1MiB rss=12.0MiB gc=7",
+			want: "cache prefix=12/256 org=3/512 | mem heap=4.2MiB sys=18.1MiB rss=12.0MiB gc=7",
 		},
 	}
 
@@ -75,7 +75,7 @@ func TestLogStatsReportsCacheSizes(t *testing.T) {
 
 	logStats()
 
-	want := "cache prefix=5/256 org=0/256"
+	want := "cache prefix=5/256 org=0/512"
 	if !strings.Contains(buf.String(), want) {
 		t.Errorf("stats line %q, want it to contain %q", buf.String(), want)
 	}

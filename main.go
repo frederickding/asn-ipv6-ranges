@@ -85,8 +85,8 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Reclaims cached entries once they pass cacheMaxAge even while the service
-	// is idle and no insert is prompting a prune.
+	// Reclaims cached entries once they pass their cache's max age, even while
+	// the service is idle and no insert is prompting a prune.
 	startCacheReaper(ctx)
 	startStatsLogger(ctx)
 
