@@ -56,7 +56,7 @@ spec:
         - name: asn-ipv6-ranges
           # /-/status was added in commit b6e6f58. An older image 404s on the
           # probe path and the pod will CrashLoopBackOff — pin at or after it.
-          image: registry.gitlab.fjd.io/frederick/asn-ipv6-ranges:20260816-b6e6f58
+          image: registry.gitlab.fjd.io/frederick/asn-ipv6-ranges:v1.0.0
           imagePullPolicy: IfNotPresent
           env:
             - name: PORT

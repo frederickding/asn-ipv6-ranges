@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: asn-ipv6-ranges
-          image: registry.gitlab.fjd.io/frederick/asn-ipv6-ranges:20260816-9c1b901
+          image: registry.gitlab.fjd.io/frederick/asn-ipv6-ranges:v1.0.0
           env:
             - name: PORT
               value: "80"
