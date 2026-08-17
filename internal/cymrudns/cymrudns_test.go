@@ -139,17 +139,24 @@ func TestLookupOrgName(t *testing.T) {
 // TestLookupOrgNameNoRecord: a NOERROR response with zero answers is what a
 // nonexistent AS<n>.asn.cymru.com name actually gets back from a real
 // resolver. Go's LookupTXT surfaces that as a *net.DNSError (its own "no such
-// host" text, not this package's), so this only asserts an error comes back
-// — the len(txts) == 0 check in LookupOrgName is defensive belt-and-braces
-// for a case the stdlib's own DNSError already covers in practice.
+// host" text, not this package's) with IsNotFound set — confirmed
+// empirically against the live zone (dig TXT AS999999999.asn.cymru.com
+// returns NXDOMAIN) — so this must be ErrNotFound, not just any error.
 func TestLookupOrgNameNoRecord(t *testing.T) {
 	addr := fakeDNS(t, "")
 
-	if _, err := LookupOrgName(context.Background(), "999999999", addr); err == nil {
+	_, err := LookupOrgName(context.Background(), "999999999", addr)
+	if err == nil {
 		t.Fatal("expected an error for a name with no TXT record")
+	}
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("got %v, want ErrNotFound", err)
 	}
 }
 
+// TestLookupOrgNameMalformedRecord: a record with the wrong number of fields
+// is a parsing anomaly, not evidence the ASN has no data, so it must NOT be
+// ErrNotFound — treating it as confirmed-blank would be over-claiming.
 func TestLookupOrgNameMalformedRecord(t *testing.T) {
 	addr := fakeDNS(t, "33020 | US")
 
@@ -160,6 +167,9 @@ func TestLookupOrgNameMalformedRecord(t *testing.T) {
 	if !strings.Contains(err.Error(), "unexpected record format") {
 		t.Errorf("unhelpful error: %v", err)
 	}
+	if errors.Is(err, ErrNotFound) {
+		t.Error("a malformed record must not be treated as confirmed-blank")
+	}
 }
 
 func TestLookupOrgNameEmptyNameField(t *testing.T) {
@@ -169,8 +179,11 @@ func TestLookupOrgNameEmptyNameField(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error for a blank AS Name field")
 	}
-	if !strings.Contains(err.Error(), "no organization name") {
+	if !strings.Contains(err.Error(), "empty name field") {
 		t.Errorf("unhelpful error: %v", err)
+	}
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("got %v, want ErrNotFound", err)
 	}
 }
 

@@ -119,7 +119,22 @@ With `src=auto` (the default), Cymru DNS is tried first, then PeeringDB, then
 the two registry sources. Cymru and PeeringDB both treat an empty org name as
 a failure internally, so this "try the next source on any failure" behavior
 already covers that case — there's no separate empty-name handling to know
-about. Which registry source goes first depends on the registry:
+about.
+
+**If Cymru and PeeringDB both come back with a *confirmed* empty result —
+not just any failure, but each one's own unambiguous "nothing here" signal
+(`cymrudns.ErrNotFound` / `peeringdb.ErrNotFound`) — the registries are
+skipped entirely** rather than queried and (almost certainly) also come back
+empty. A budget refusal, an upstream's own rate-limit response, a timeout, or
+a malformed record from either source does *not* count as confirmed-empty, so
+the registries are still queried in those cases exactly as before — the two
+cheap sources have to actually agree the ASN has no data, not merely fail to
+answer it. This matters in practice: some ASNs genuinely have no current
+registration data anywhere (deregistered, reclaimed) — querying two
+tightly-budgeted registries to confirm what two free sources already agreed
+on is pure waste.
+
+Which registry source goes first depends on the registry:
 
 | Registry | Order | Why |
 | --- | --- | --- |

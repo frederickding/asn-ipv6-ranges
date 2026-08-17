@@ -224,9 +224,20 @@ The result is written to `internal/asnreg/ranges_gen.go`, which is committed.
 ### Per-request fan-out
 
 Worst case for one request (`?org=1&src=auto`, a RIPE ASN, every source
-failing): 1 RADB query, 1 Cymru DNS query, 1 PeeringDB call, 1 RDAP request,
-and 2 whois queries — six upstream calls. The 20s request deadline covers all
-of them together.
+failing *ambiguously* — a budget refusal, a timeout, a malformed record,
+anything short of both cheap sources confirming an empty result): 1 RADB
+query, 1 Cymru DNS query, 1 PeeringDB call, 1 RDAP request, and 2 whois
+queries — six upstream calls. The 20s request deadline covers all of them
+together.
+
+That worst case only applies when the outcome is genuinely unresolved,
+though. If Cymru DNS and PeeringDB both return their own confirmed "no
+record" answer (`cymrudns.ErrNotFound` / `peeringdb.ErrNotFound` — see
+`resolveOrgName` in `cache.go`), the registries are skipped rather than
+queried and (almost certainly) also come back empty: two upstream calls
+total, not six. A budget refusal or any other ambiguous failure from either
+cheap source does not trigger this — only an unambiguous confirmed-empty
+result from both.
 
 ---
 

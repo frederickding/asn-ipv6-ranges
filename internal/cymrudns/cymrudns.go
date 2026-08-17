@@ -31,6 +31,15 @@ const Host = "asn.cymru.com"
 // round trip, so this can be far tighter than the HTTP adapters' timeouts.
 const timeout = 5 * time.Second
 
+// ErrNotFound reports that Cymru's zone confidently has no organization data
+// for the requested ASN — a real NXDOMAIN/NODATA-style DNS answer, an empty
+// record, or a blank AS Name field — as opposed to a lookup that merely
+// failed to complete (timeout, SERVFAIL, network error). Wrapped so callers
+// can distinguish "confirmed nothing here" from "couldn't ask" with
+// errors.Is; a malformed record (wrong number of fields) is deliberately
+// left unwrapped, since garbled data isn't evidence of an empty record.
+var ErrNotFound = errors.New("no organization name found")
+
 // LookupOrgName resolves the organization name for an ASN (decimal, no "AS"
 // prefix) via Team Cymru's DNS zone. resolverAddr is a "host:port" resolver
 // to query; an empty string uses DefaultResolver.
@@ -59,10 +68,19 @@ func LookupOrgName(ctx context.Context, asn, resolverAddr string) (string, error
 	name := fmt.Sprintf("AS%s.asn.cymru.com", asn)
 	txts, err := resolver.LookupTXT(ctx, name)
 	if err != nil {
+		// IsNotFound is Go's own signal for an NXDOMAIN/NODATA-style "this
+		// name does not exist" answer — confirmed empirically for a
+		// nonexistent ASN against Cymru's zone. Anything else (timeout,
+		// SERVFAIL, network failure) is left unwrapped: it means the lookup
+		// didn't complete, not that Cymru confirmed there's nothing here.
+		var dnsErr *net.DNSError
+		if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+			return "", fmt.Errorf("%w for AS%s", ErrNotFound, asn)
+		}
 		return "", err
 	}
 	if len(txts) == 0 {
-		return "", fmt.Errorf("no TXT record for AS%s", asn)
+		return "", fmt.Errorf("%w for AS%s: no TXT record", ErrNotFound, asn)
 	}
 
 	fields := strings.Split(txts[0], "|")
@@ -72,7 +90,7 @@ func LookupOrgName(ctx context.Context, asn, resolverAddr string) (string, error
 
 	orgName := strings.TrimSpace(fields[4])
 	if orgName == "" {
-		return "", errors.New("no organization name in response")
+		return "", fmt.Errorf("%w for AS%s: empty name field", ErrNotFound, asn)
 	}
 	return orgName, nil
 }

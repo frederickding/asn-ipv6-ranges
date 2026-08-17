@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -536,7 +537,11 @@ func TestOrgAutoFallsThrough(t *testing.T) {
 
 // TestOrgAutoFullChainOrder pins the whole auto chain's order across all four
 // sources: Cymru DNS, then PeeringDB, then whichever registry source
-// preferRDAP picks first.
+// preferRDAP picks first. Deliberately uses plain, non-sentinel errors for
+// Cymru/PeeringDB (not cymrudns.ErrNotFound / peeringdb.ErrNotFound) — an
+// ordinary failure, not a confirmed-empty one, is what must still fall
+// through to the registries; see TestOrgAutoSkipsRegistryWhenBothConfirmedBlank
+// for the confirmed-empty case, which does not reach the registries at all.
 func TestOrgAutoFullChainOrder(t *testing.T) {
 	clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 	swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })
@@ -575,7 +580,10 @@ func TestOrgAutoFullChainOrder(t *testing.T) {
 // org name as an error internally (see internal/cymrudns and
 // internal/peeringdb), so an empty name from either must fall through to the
 // next source exactly like any other failure — not be reported as a blank
-// "# org:" comment.
+// "# org:" comment. This uses plain errors.New text that happens to look
+// like an empty-name message but is not wrapped with the real ErrNotFound
+// sentinel, so it exercises the ordinary fallthrough path, not the
+// confirmed-blank short-circuit (see TestOrgAutoSkipsRegistryWhenBothConfirmedBlank).
 func TestOrgAutoEmptyNameFallsThrough(t *testing.T) {
 	clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 	swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })
@@ -593,6 +601,133 @@ func TestOrgAutoEmptyNameFallsThrough(t *testing.T) {
 
 	if !hasComment(rec.Body.String(), "# org: From whois (source: whois.arin.net)") {
 		t.Errorf("empty names from Cymru/PeeringDB did not fall through:\n%s", rec.Body.String())
+	}
+}
+
+// TestOrgAutoSkipsRegistryWhenBothConfirmedBlank: when Cymru DNS and
+// PeeringDB both return a *confirmed* empty result — their real ErrNotFound
+// sentinels, not just any error — the registries must not be queried at
+// all. Querying them would almost certainly also come back empty, wasting
+// the tightly-budgeted registry sources on an ASN two independent sources
+// already agree has no data (this is exactly what AS29073 looked like
+// against the live upstreams).
+func TestOrgAutoSkipsRegistryWhenBothConfirmedBlank(t *testing.T) {
+	clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })
+
+	orgCymruLookup = func(_ context.Context, asn, _ string) (string, error) {
+		return "", fmt.Errorf("%w for AS%s", cymrudns.ErrNotFound, asn)
+	}
+	orgPeeringDBLookup = func(_ context.Context, asn, _ string) (string, error) {
+		return "", fmt.Errorf("%w for AS%s", peeringdb.ErrNotFound, asn)
+	}
+	orgRIRLookup = func(context.Context, asnreg.Registry, string) (string, error) {
+		t.Error("whois queried despite both cheap sources confirming no data")
+		return "", nil
+	}
+	orgRDAPLookup = func(context.Context, asnreg.Registry, string) (string, error) {
+		t.Error("RDAP queried despite both cheap sources confirming no data")
+		return "", nil
+	}
+
+	rec := httptest.NewRecorder()
+	asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/"+arinASN+"?org=1", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("org failure must not fail the request, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"no organization name found", "no organization found", "skipping RIR whois/RDAP"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q in:\n%s", want, body)
+		}
+	}
+	if !hasComment(body, "# count: 2") {
+		t.Errorf("prefixes missing after org short-circuit:\n%s", body)
+	}
+}
+
+// TestOrgAutoStillQueriesRegistryOnAmbiguousFailure: the registry
+// short-circuit must only engage when both cheap sources are *confirmed*
+// empty — a budget refusal, a plain transport error, or a malformed record
+// leaves the outcome ambiguous, and the registries must still be queried
+// exactly as before.
+func TestOrgAutoStillQueriesRegistryOnAmbiguousFailure(t *testing.T) {
+	tests := []struct {
+		name                     string
+		cymru                    func(asn string) (string, error)
+		peeringdb                func(asn string) (string, error)
+		peeringdbBudgetExhausted bool
+	}{
+		{
+			name: "Cymru confirmed-blank, PeeringDB budget-exhausted",
+			cymru: func(asn string) (string, error) {
+				return "", fmt.Errorf("%w for AS%s", cymrudns.ErrNotFound, asn)
+			},
+			peeringdbBudgetExhausted: true,
+		},
+		{
+			name: "Cymru confirmed-blank, PeeringDB transport error",
+			cymru: func(asn string) (string, error) {
+				return "", fmt.Errorf("%w for AS%s", cymrudns.ErrNotFound, asn)
+			},
+			peeringdb: func(string) (string, error) {
+				return "", errors.New("dial tcp: connection refused")
+			},
+		},
+		{
+			name: "Cymru malformed record, PeeringDB confirmed-blank",
+			cymru: func(asn string) (string, error) {
+				return "", fmt.Errorf("unexpected record format: %q", "garbage")
+			},
+			peeringdb: func(asn string) (string, error) {
+				return "", fmt.Errorf("%w for AS%s", peeringdb.ErrNotFound, asn)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+			swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })
+
+			orgCymruLookup = func(_ context.Context, asn, _ string) (string, error) { return tt.cymru(asn) }
+
+			if tt.peeringdbBudgetExhausted {
+				// Pre-acquire PeeringDB's only concurrency slot and never
+				// release it within this test, so the real lookup call inside
+				// resolveOrgName is refused with ratelimit.ErrLimited — not
+				// cymrudns/peeringdb.ErrNotFound — exactly like a genuine
+				// budget refusal.
+				budgetFor = func(host string) budget {
+					if host == peeringdb.Host {
+						return budget{rate: 1e6, burst: 1e6, concurrency: 1}
+					}
+					return unlimitedBudget
+				}
+				resetLimiters()
+				release, err := limiterFor(peeringdb.Host).Acquire()
+				if err != nil {
+					t.Fatalf("failed to pre-acquire the test budget: %v", err)
+				}
+				t.Cleanup(release)
+				orgPeeringDBLookup = func(context.Context, string, string) (string, error) {
+					t.Error("PeeringDB lookup function called despite an exhausted budget")
+					return "", nil
+				}
+			} else {
+				orgPeeringDBLookup = func(_ context.Context, asn, _ string) (string, error) { return tt.peeringdb(asn) }
+			}
+
+			orgRIRLookup = func(context.Context, asnreg.Registry, string) (string, error) { return "From whois", nil }
+
+			rec := httptest.NewRecorder()
+			asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/"+arinASN+"?org=1", nil))
+
+			if !hasComment(rec.Body.String(), "# org: From whois (source: whois.arin.net)") {
+				t.Errorf("registry was not queried:\n%s", rec.Body.String())
+			}
+		})
 	}
 }
 

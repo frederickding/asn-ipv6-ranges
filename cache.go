@@ -445,6 +445,15 @@ func preferRDAP(reg asnreg.Registry) bool {
 // "try the next source on any error" behavior already produces the
 // empty-name fallback for free. An explicit src uses only that source and
 // never falls back, so the parameter can be trusted to exercise one path.
+//
+// If Cymru and PeeringDB both come back with a *confirmed* empty result —
+// cymrudns.ErrNotFound / peeringdb.ErrNotFound, not just any failure — the
+// registry sources are skipped entirely rather than queried and (almost
+// certainly) also come back empty. Any other failure from either one
+// (a budget refusal, an upstream's own rate-limit response, a timeout, a
+// malformed record) leaves that flag false, so the registry fallback still
+// runs exactly as before: the two cheap sources have to actually agree the
+// ASN has no data, not merely fail to answer.
 func resolveOrgName(ctx context.Context, asn string, v uint64, src string) (orgResult, error) {
 	reg, haveRegistry := asnreg.Lookup(v)
 
@@ -474,15 +483,24 @@ func resolveOrgName(ctx context.Context, asn string, v uint64, src string) (orgR
 	// refusal from either one is not a reason to stop early; falling through
 	// to the next source (even eventually a registry) is exactly the point.
 	var errs []error
+	var cymruNotFound, peeringdbNotFound bool
 	if res, err := lookupCymru(ctx, asn); err == nil {
 		return res, nil
 	} else {
 		errs = append(errs, err)
+		cymruNotFound = errors.Is(err, cymrudns.ErrNotFound)
 	}
 	if res, err := lookupPeeringDB(ctx, asn); err == nil {
 		return res, nil
 	} else {
 		errs = append(errs, err)
+		peeringdbNotFound = errors.Is(err, peeringdb.ErrNotFound)
+	}
+
+	if cymruNotFound && peeringdbNotFound {
+		errs = append(errs, errors.New(
+			"skipping RIR whois/RDAP: Cymru DNS and PeeringDB both confirm no organization record for this ASN"))
+		return orgResult{}, errors.Join(errs...)
 	}
 
 	if !haveRegistry {
