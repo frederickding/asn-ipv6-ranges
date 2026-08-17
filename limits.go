@@ -27,14 +27,17 @@ const (
 	// sub-5ms 503s — the other 29 slots a limit of 32 would have reserved were
 	// never reachable, since a spent budget fails fast rather than queuing.
 	//
-	// 12 is the sum of every upstream's own concurrency ceiling — radb(3) +
-	// lacnic(2) + ripe(2) + registry(2) + api(2) = 11, rounded up by one — so a
-	// burst that legitimately maxes out every registry at once (a mixed batch
-	// of org=1 requests, say) still finds a free slot, with the remainder
-	// available for cache hits, which never touch a budget at all and are the
-	// traffic this number should actually flex for. Raise it and the memory
-	// limit together, never alone.
-	defaultMaxInflight = 12
+	// 20 is the sum of every upstream's own concurrency ceiling — radb(3) +
+	// lacnic(2) + ripe(2) + registry(2) + cymru(8) + peeringdb(2, the keyed
+	// tier, the larger of the two) = 19, rounded up by one — so a burst that
+	// legitimately maxes out every registry at once (a mixed batch of org=1
+	// requests, say) still finds a free slot, with the remainder available
+	// for cache hits, which never touch a budget at all and are the traffic
+	// this number should actually flex for. Cymru's ceiling dominates the
+	// sum because its DNS zone is deliberately budgeted far looser than
+	// everything else here — see upstream.go's cymruBudget. Raise it and the
+	// memory limit together, never alone.
+	defaultMaxInflight = 20
 
 	// inflightRetryAfter is advertised on a shed request. Requests are shed
 	// because the process is momentarily saturated, which is a condition that

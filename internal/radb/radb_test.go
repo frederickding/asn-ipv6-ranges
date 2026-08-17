@@ -83,6 +83,11 @@ func TestQueryOversizedResponse(t *testing.T) {
 		if !strings.Contains(err.Error(), "exceeds") {
 			t.Errorf("unhelpful error: %v", err)
 		}
+		// Callers key off this sentinel to keep answering the parts of a
+		// request that do not depend on the prefix list.
+		if !errors.Is(err, ErrTooLarge) {
+			t.Errorf("got %v, want ErrTooLarge", err)
+		}
 		if body != "" {
 			t.Errorf("returned %d bytes alongside the error", len(body))
 		}

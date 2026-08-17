@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"asn-ipv6-ranges/internal/peeringdb"
 )
 
 // swapMaxInflight sets the concurrency cap for one test.
@@ -168,6 +170,8 @@ func TestInitLimits(t *testing.T) {
 // a registry's whois and RDAP front ends share one budget, and LACNIC — the
 // only registry that publishes a number, and the tightest — gets its own.
 func TestBudgetForMapsRegistriesToTheirLimits(t *testing.T) {
+	t.Setenv(peeringdb.KeyEnv, "") // deterministic: this table expects the anonymous tier
+
 	tests := []struct {
 		host string
 		want budget
@@ -177,7 +181,8 @@ func TestBudgetForMapsRegistriesToTheirLimits(t *testing.T) {
 		{"rdap.lacnic.net", lacnicBudget},
 		{"whois.ripe.net", ripeBudget},
 		{"rdap.db.ripe.net", ripeBudget},
-		{"api.whoisfreaks.com", apiBudget},
+		{"asn.cymru.com", cymruBudget},
+		{"www.peeringdb.com", peeringdbBudget},
 		{"whois.arin.net", registryBudget},
 		{"rdap.arin.net", registryBudget},
 		{"rdap.apnic.net", registryBudget},
@@ -187,6 +192,15 @@ func TestBudgetForMapsRegistriesToTheirLimits(t *testing.T) {
 		if got := budgetFor(tc.host); got != tc.want {
 			t.Errorf("budgetFor(%q) = %+v, want %+v", tc.host, got, tc.want)
 		}
+	}
+}
+
+// TestBudgetForPeeringDBAuthTier: an API key raises PeeringDB's rate-limit
+// tier, so budgetFor must switch budgets based on whether one is configured.
+func TestBudgetForPeeringDBAuthTier(t *testing.T) {
+	t.Setenv(peeringdb.KeyEnv, "a-key")
+	if got := budgetFor("www.peeringdb.com"); got != peeringdbAuthBudget {
+		t.Errorf("budgetFor with a key set = %+v, want peeringdbAuthBudget %+v", got, peeringdbAuthBudget)
 	}
 }
 

@@ -109,12 +109,16 @@ func asHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), requestTimeout)
 	defer cancel()
 
-	prefixes, queriedAt, err := getPrefixes(ctx, asn)
-	if err != nil {
-		writeUpstreamError(w, "whois query failed", err)
+	// A prefix response too large to hold is the one upstream failure that
+	// still leaves something worth answering: the org name comes from an
+	// unrelated source, and the client explicitly asked for it. Every other
+	// failure sinks the request as before.
+	prefixes, queriedAt, prefixesErr := getPrefixes(ctx, asn)
+	if prefixesErr != nil && !(wantOrg && errors.Is(prefixesErr, radb.ErrTooLarge)) {
+		writeUpstreamError(w, "whois query failed", prefixesErr)
 		return
 	}
-	if aggregate {
+	if aggregate && prefixesErr == nil {
 		prefixes = aggregatePrefixes(prefixes)
 	}
 
@@ -130,7 +134,8 @@ func asHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(b, "# IPv6 prefixes for AS%s (source: %s)\n", asn, radb.Host)
 	switch {
 	case wantOrg:
-		// An org lookup failure must not sink the prefix list.
+		// An org lookup failure must not sink the prefix list, and an
+		// oversized prefix response must not sink the org lookup.
 		if res, err := getOrgName(ctx, asn, v, orgSrc); err != nil {
 			fmt.Fprintf(b, "# org: lookup failed: %s\n", singleLine(err.Error()))
 		} else {
@@ -138,6 +143,10 @@ func asHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	case r.URL.Query().Get("src") != "":
 		b.WriteString("# src: ignored (org lookup not requested)\n")
+	}
+	if prefixesErr != nil {
+		fmt.Fprintf(b, "# prefixes: unavailable (whois query failed: %s)\n", singleLine(prefixesErr.Error()))
+		return
 	}
 	if aggregate {
 		b.WriteString("# aggregate: on (more-specifics covered by a broader prefix removed)\n")

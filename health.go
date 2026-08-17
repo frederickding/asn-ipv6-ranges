@@ -15,8 +15,8 @@ var startTime = time.Now()
 
 // statusHandler answers Kubernetes liveness and readiness probes.
 //
-// It deliberately performs no upstream I/O. Probing RADB, a RIR, or the
-// WhoisFreaks API here would tie the pod's health to third parties: an outage
+// It deliberately performs no upstream I/O. Probing RADB, a RIR, Cymru, or
+// PeeringDB here would tie the pod's health to third parties: an outage
 // at any of them would fail the probe and make Kubernetes restart or
 // depool otherwise-healthy pods, turning a degraded feature into an outage.
 // The service can still serve cached prefixes and return useful errors while

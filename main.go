@@ -1,10 +1,11 @@
 // Command asn-ipv6-ranges serves the IPv6 prefixes announced by an ASN as
 // text/plain, one prefix per line.
 //
-// Source data comes from two upstreams, each isolated in its own package:
-// internal/radb (raw WHOIS over TCP) and internal/whoisfreaks (the optional
-// HTTPS organization-name lookup). This package holds the HTTP surface,
-// caching, and ASN/prefix logic.
+// Source data comes from several upstreams, each isolated in its own
+// package: internal/radb (raw WHOIS over TCP) for prefixes, and
+// internal/cymrudns (DNS), internal/peeringdb (HTTPS), internal/rirwhois
+// (raw WHOIS), and internal/rdap (HTTPS) for organization-name lookups. This
+// package holds the HTTP surface, caching, and ASN/prefix logic.
 package main
 
 //go:generate go run gen_asn_ranges.go
@@ -49,6 +50,7 @@ func main() {
 
 	initAccessLog()
 	initLimits()
+	logDataSources()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/as/", asHandler)
@@ -89,6 +91,10 @@ func main() {
 	// the service is idle and no insert is prompting a prune.
 	startCacheReaper(ctx)
 	startStatsLogger(ctx)
+	startPeeringDBBatcher(ctx)
+	// Non-blocking: a key PeeringDB will not accept must be reported and
+	// dropped, but never delay the listener or keep the service from starting.
+	startPeeringDBKeyCheck(ctx)
 
 	go func() {
 		log.Printf("asn-ipv6-ranges %s listening on %s", build.Version, srv.Addr)

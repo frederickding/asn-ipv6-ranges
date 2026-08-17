@@ -58,8 +58,7 @@ func TestStatusHandlerIndependentOfUpstreams(t *testing.T) {
 	swapTestHooks(t, &clock, func(string) (string, error) {
 		return "", errors.New("radb is down")
 	})
-	getenv = func(string) string { return "secret-key" }
-	orgAPILookup = func(context.Context, string, string) (string, error) { return "", errors.New("api is down") }
+	orgCymruLookup = func(context.Context, string, string) (string, error) { return "", errors.New("cymru is down") }
 
 	// Confirm the service really is degraded right now.
 	asRec := httptest.NewRecorder()

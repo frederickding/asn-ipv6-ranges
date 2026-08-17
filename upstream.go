@@ -46,9 +46,24 @@ var (
 	// publish a number. Chosen low enough that it should never be noticed.
 	registryBudget = budget{rate: 2, burst: 5, concurrency: 2}
 
-	// apiBudget covers the metered commercial API, where every call has a cost
-	// and the limit is contractual rather than technical.
-	apiBudget = budget{rate: 1, burst: 3, concurrency: 2}
+	// cymruBudget: Cymru built this DNS zone specifically for high-volume bulk
+	// lookups (unlike its rate-limited port-43 whois service), and the query
+	// goes to a caching recursive resolver (Cloudflare by default) rather than
+	// hitting Cymru's authoritative servers directly, so it tolerates far more
+	// traffic than every other upstream here. Still budgeted for consistency
+	// with every other outbound call, just loosely.
+	cymruBudget = budget{rate: 20, burst: 40, concurrency: 8}
+
+	// peeringdbBudget: anonymous requests are documented at 20/min per IP
+	// (docs.peeringdb.com). Kept well under that (and halved again for the
+	// two-replica default, per the caveat above) so this process alone never
+	// gets close to being throttled or blocked, even before another client
+	// sharing the egress IP is considered.
+	peeringdbBudget = budget{rate: 6.0 / 60.0, burst: 3, concurrency: 1}
+
+	// peeringdbAuthBudget: an API key raises PeeringDB's documented limit to
+	// 40/min. Used automatically once PEERINGDB_API_KEY is set — see budgetFor.
+	peeringdbAuthBudget = budget{rate: 15.0 / 60.0, burst: 5, concurrency: 2}
 )
 
 type budget struct {
@@ -74,8 +89,16 @@ var budgetFor = func(host string) budget {
 		return lacnicBudget
 	case strings.Contains(host, "ripe"):
 		return ripeBudget
-	case strings.Contains(host, "whoisfreaks"):
-		return apiBudget
+	case strings.Contains(host, "cymru"):
+		return cymruBudget
+	case strings.Contains(host, "peeringdb"):
+		// peeringDBAPIKey, not the environment: a key the startup check
+		// rejected must drop this process back to the anonymous rate rather
+		// than keep querying at the authenticated one with no credential.
+		if peeringDBAPIKey() != "" {
+			return peeringdbAuthBudget
+		}
+		return peeringdbBudget
 	default:
 		return registryBudget
 	}
@@ -92,7 +115,7 @@ var (
 
 // limiterFor returns the limiter for an upstream host, creating it on first
 // use. The set of hosts is closed — five registries times two protocols, plus
-// RADB and the API — so this map cannot grow with traffic.
+// RADB, Cymru DNS, and PeeringDB — so this map cannot grow with traffic.
 func limiterFor(host string) *ratelimit.Limiter {
 	limitersMu.Lock()
 	defer limitersMu.Unlock()
@@ -138,6 +161,22 @@ func pauseUpstream(host string, t time.Time) {
 // spent, in whole seconds.
 func retryAfterFor(host string) int {
 	return int(limiterFor(host).RetryAfter() / time.Second)
+}
+
+// forgetLimiter drops one host's limiter so the next query rebuilds it from a
+// freshly evaluated budget. For when the facts behind budgetFor change under
+// us, which today means exactly one thing: the PeeringDB key turned out to be
+// invalid and the anonymous rate now applies.
+//
+// A query already holding a slot on the discarded limiter is invisible to the
+// replacement, so concurrency can briefly exceed the new budget by the number
+// of calls in flight. Not worth solving here — this happens once, seconds
+// after startup, against a budget whose concurrency is measured in single
+// digits.
+func forgetLimiter(host string) {
+	limitersMu.Lock()
+	defer limitersMu.Unlock()
+	delete(limiters, host)
 }
 
 // resetLimiters drops all limiter state, so a test starts with full budgets.

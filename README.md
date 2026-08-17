@@ -57,7 +57,7 @@ lookup runs — so a saved file records when its data was really fetched.
 | --- | --- | --- |
 | `agg` | `1` (on) | Remove prefixes already covered by a broader prefix in the list. |
 | `org` | `0` (off) | Look up the ASN's organization name and report it in a comment. |
-| `src` | `auto` | Choose which source answers the `org` lookup: `auto`, `api`, `whois`, `rdap`. |
+| `src` | `auto` | Choose which source answers the `org` lookup: `auto`, `cymru`, `peeringdb`, `whois`, `rdap`. |
 
 `agg` and `org` accept `1`/`0` and `true`/`false` (case-insensitive; `t`/`f`
 also work). An empty value (`?agg=`) falls back to the default. Any other value
@@ -104,18 +104,37 @@ curl 'http://localhost:8080/as/2906?org=1'
 ...
 ```
 
-There are three sources, and **no configuration is required** — the two registry
-sources are always available:
+There are four sources, and **no configuration is required for any of
+them** — including PeeringDB, whose optional API key only raises its rate
+limit (see below), it is never required for a lookup to succeed:
 
 | Source | Requires | Notes |
 | --- | --- | --- |
+| [Team Cymru DNS zone](https://asn.cymru.com/) | nothing | One DNS TXT query; resolver defaults to Cloudflare, configurable via `CYMRU_DNS_RESOLVER` |
+| [PeeringDB API](https://www.peeringdb.com/apidocs/) | nothing (optional `PEERINGDB_API_KEY`) | Self-reported org name; a key raises the anonymous rate limit |
 | RIR whois (port 43) | nothing | Per-registry text formats; two queries for RIPE |
 | RIR RDAP (HTTPS) | nothing | Structured JSON; one query |
-| [WhoisFreaks API](https://whoisfreaks.com/documentation/asn-whois-api) | `WHOISFREAKS_API_KEY` | Normalized single-field answer |
 
-With `src=auto` (the default) the API is tried first **when a key is set**, then
-the two registry sources. Which registry source goes first depends on the
-registry:
+With `src=auto` (the default), Cymru DNS is tried first, then PeeringDB, then
+the two registry sources. Cymru and PeeringDB both treat an empty org name as
+a failure internally, so this "try the next source on any failure" behavior
+already covers that case — there's no separate empty-name handling to know
+about.
+
+**If Cymru and PeeringDB both come back with a *confirmed* empty result —
+not just any failure, but each one's own unambiguous "nothing here" signal
+(`cymrudns.ErrNotFound` / `peeringdb.ErrNotFound`) — the registries are
+skipped entirely** rather than queried and (almost certainly) also come back
+empty. A budget refusal, an upstream's own rate-limit response, a timeout, or
+a malformed record from either source does *not* count as confirmed-empty, so
+the registries are still queried in those cases exactly as before — the two
+cheap sources have to actually agree the ASN has no data, not merely fail to
+answer it. This matters in practice: some ASNs genuinely have no current
+registration data anywhere (deregistered, reclaimed) — querying two
+tightly-budgeted registries to confirm what two free sources already agreed
+on is pure waste.
+
+Which registry source goes first depends on the registry:
 
 | Registry | Order | Why |
 | --- | --- | --- |
@@ -140,16 +159,19 @@ output, so the response is still `200` with the reason in a comment:
 # org: lookup failed: whois.arin.net: dial tcp: i/o timeout
 ```
 
-The API key is stripped from any error text before it reaches the response, and
-names from every source are flattened to a single line so they cannot escape
-their comment and forge a prefix entry.
+PeeringDB's API key, when set, travels in a request header rather than a URL
+query parameter, so — unlike WhoisFreaks previously — it cannot leak into an
+`http.Client` transport error and needs no redaction. Names from every source
+are still flattened to a single line so they cannot escape their comment and
+forge a prefix entry.
 
 ### `src` — choosing the org source
 
 | `src` | Behavior |
 | --- | --- |
-| `auto` (default) | API when keyed, then the registry sources in the order above |
-| `api` | WhoisFreaks only |
+| `auto` (default) | Cymru DNS, then PeeringDB, then the registry sources in the order above |
+| `cymru` | Team Cymru's DNS zone only |
+| `peeringdb` | PeeringDB only |
 | `whois` | RIR whois only |
 | `rdap` | RIR RDAP only |
 
@@ -163,12 +185,10 @@ curl 'http://localhost:8080/as/24940?org=1&src=rdap'
 
 **An explicit source never falls back.** If `src=whois` fails, the failure is
 reported rather than another source being tried silently — otherwise the
-parameter could not be trusted to exercise one path. `src=api` without a key
-configured is likewise a reported failure, not a silent skip:
-
-```
-# org: lookup failed: api selected but WHOISFREAKS_API_KEY is not set
-```
+parameter could not be trusted to exercise one path. Neither `cymru` nor
+`peeringdb` requires any configuration, so there is no equivalent to
+WhoisFreaks' old "selected but no key set" failure — both always attempt a
+real lookup.
 
 `src` only modifies an org lookup. Supplied without `org=1` it does nothing, and
 the response says so rather than passing silently:
@@ -205,9 +225,10 @@ continues into a postal address.
 | Source | URL | When it is contacted |
 | --- | --- | --- |
 | RADB WHOIS | `whois.radb.net:43` (raw WHOIS over TCP) | Every uncached request. |
+| Team Cymru DNS zone | `AS<n>.asn.cymru.com` TXT, via the resolver in `CYMRU_DNS_RESOLVER` (default `1.1.1.1:53`) | Only for `org` lookups, per the source order above, or when `src=cymru`. |
+| PeeringDB API | `https://www.peeringdb.com/api/org` (and `/net`, only when batching — see doc/networking.md) | Only for `org` lookups, per the source order above, or when `src=peeringdb`. |
 | RIR whois servers | `whois.{arin,ripe,apnic,lacnic,afrinic}.net:43` | Only for `org` lookups, per the source order above, or when `src=whois`. |
 | RIR RDAP endpoints | `https://rdap.{arin,apnic,lacnic,afrinic}...`, `https://rdap.db.ripe.net/` | Only for `org` lookups, per the source order above, or when `src=rdap`. |
-| WhoisFreaks ASN WHOIS API | `https://api.whoisfreaks.com/v2.0/asn-whois` | Only when `org` is enabled and an API key is set, unless `src` selects another source. |
 | IANA AS number registries | `as-numbers-1.csv`, `as-numbers-2.csv` | Build time only, via `go generate`. Never at runtime. |
 
 **See [doc/networking.md](doc/networking.md)** for the full picture: exact
@@ -240,7 +261,7 @@ intermediary answers a probe from cache. `GET` and `HEAD` are accepted, anything
 else returns `405`. The path is matched exactly — `/-/status/anything` is `404`.
 
 **It performs no upstream I/O**, and that is deliberate. Probing RADB, a RIR, or
-the WhoisFreaks API here would tie pod health to third parties: an outage at any
+PeeringDB here would tie pod health to third parties: an outage at any
 of them would fail the probe and make Kubernetes restart or depool pods that are
 working fine. The service still answers from cache and returns useful errors
 while an upstream is down, so the probe measures what it should — the process is
@@ -321,10 +342,11 @@ through both CI systems.
 | --- | --- | --- |
 | `PORT` | `8080` | Port to listen on. The convention used by most serverless container platforms. |
 | `LISTEN_ADDR` | — | Full `host:port` override. Takes precedence over `PORT`. |
-| `WHOISFREAKS_API_KEY` | — | Optional. When set, the WhoisFreaks API becomes the first `org` source tried; unset, `org` resolves from the ASN's registry instead. Not required for `org` to work. |
+| `CYMRU_DNS_RESOLVER` | `1.1.1.1:53` | Optional. `host:port` of the DNS resolver Team Cymru's ASN zone is queried through. Never required — the default just works. |
+| `PEERINGDB_API_KEY` | — | Optional. Raises PeeringDB's rate limit from 20 to 40 requests/minute; never required for the `org` lookup to work. Verified once at startup — see [Startup logging](#startup-logging). |
 | `ACCESS_LOG` | `1` | Request logging. Set `0`/`false` to disable. |
 | `ACCESS_LOG_PROBES` | `0` | Include `/-/status` in the access log. Useful when debugging probes. |
-| `MAX_INFLIGHT` | `12` | Concurrent requests held at once. Past it, requests get `503` with `Retry-After` rather than being queued. Sized to the upstream concurrency budgets in [doc/networking.md](doc/networking.md), not to memory — raise it and the container memory limit together anyway, since it is still the front-door bound. |
+| `MAX_INFLIGHT` | `20` | Concurrent requests held at once. Past it, requests get `503` with `Retry-After` rather than being queued. Sized to the upstream concurrency budgets in [doc/networking.md](doc/networking.md), not to memory — raise it and the container memory limit together anyway, since it is still the front-door bound. |
 
 A value that isn't a recognized boolean logs a warning and keeps the default —
 misconfigured logging shouldn't stop the service from starting. `MAX_INFLIGHT`
@@ -346,6 +368,30 @@ So they can be separated with a plain redirect:
 ```bash
 ./asn-ipv6-ranges 1>access.log 2>error.log
 ```
+
+### Startup logging
+
+Before the listener comes up, the service logs the upstreams it will query and
+how they are configured:
+
+```
+data sources: prefixes=whois.radb.net | org=asn.cymru.com (resolver 1.1.1.1:53 (default)), www.peeringdb.com (api key set, verifying), RIR whois, RDAP
+```
+
+No source can be disabled — they are gated by the per-host rate budgets in
+[doc/networking.md](doc/networking.md), not by configuration — so this is an
+inventory, not a list of toggles. It exists so the two things the environment
+can get wrong are visible in a fresh pod's log: the DNS resolver in use, and
+whether `PEERINGDB_API_KEY` was picked up. The key's value is never logged.
+
+If a key is set, a **non-blocking** background check verifies it against
+PeeringDB and logs the result. Only an explicit credential rejection (`401`
+or `403`) drops the key; the process then queries PeeringDB anonymously at the
+lower rate limit for the rest of its life. A timeout, a `5xx`, or any other
+failure is inconclusive and leaves the key in place — discarding a working key
+over one bad minute upstream would be worse, since nothing retries. Either way
+the check is never fatal: PeeringDB does not require a key, so a bad one is a
+reason to warn, not a reason to refuse to serve.
 
 **See [doc/logging.md](doc/logging.md)** for the full picture: the access log
 format and its escaping rules, how the client address is resolved and why it is
@@ -407,15 +453,25 @@ once, regardless of how many are inbound. See
 That row is the demonstration, not a scaling factor: raising `MAX_INFLIGHT`
 past 12 would not raise it further, since RADB's own budget — not
 `MAX_INFLIGHT` — is what stops at 3. A single RADB response is separately
-capped at 8 MiB, so concurrency cannot spike without bound regardless. That
-cap is enforced rather than truncating: the largest real responses measured
-are 1.12 MB (AS3356) and 2.43 MB (AS4134), and a response over the cap
-returns an error instead of a silently shortened prefix list.
+capped at 20 MiB, so concurrency cannot spike without bound regardless. That
+cap is enforced rather than truncating: the largest real response measured is
+16.28 MB (AS13335, whose route-object count is inflated by IRRd's
+RPKI-to-IRR conversion), and a response over the cap returns an error instead
+of a silently shortened prefix list. The measured row above predates the
+raise from 8 MiB and is retained as the concurrency demonstration it is.
 
-The supplied Kubernetes manifest sets `limits.memory: 96Mi` with
-`GOMEMLIMIT=80MiB`, so the Go GC works harder as it approaches the ceiling
-instead of the pod being OOM-killed. See [doc/caching.md](doc/caching.md#memory)
-for how the cache capacities themselves contribute to that ceiling.
+A too-large response is the one upstream failure that does not sink the whole
+request: with `org=1`, the organization name still comes back (it is resolved
+from an unrelated source), and the prefix section reports
+`# prefixes: unavailable`.
+
+The supplied Kubernetes manifest sets `limits.memory: 128Mi` with
+`GOMEMLIMIT=80MiB`. The gap between them is deliberate headroom for the 20
+MiB body cap rather than a soft landing: the Go GC works harder as it
+approaches `GOMEMLIMIT`, and a pathological burst that still overruns
+`128Mi` is OOM-killed and restarted, which the two-replica default absorbs.
+See [doc/caching.md](doc/caching.md#memory) for how the cache capacities
+themselves contribute to that ceiling.
 
 ## Responses
 
@@ -489,14 +545,18 @@ stats.go                       5-minute cache and memory stats (stderr)
 cache.go                       caches, request coalescing, org source resolution, test seams
 limits.go                      inbound concurrency cap (MAX_INFLIGHT)
 upstream.go                    per-registry outbound query budgets
+sources.go                     startup data-source inventory, PeeringDB key verification
+peeringdb_key.go               the one accessor for the PeeringDB key, and its rejection
+peeringdb_batch.go             forced src=peeringdb request batching under concurrency
 asn.go                         ASN parsing and validation
 prefixes.go                    route6 extraction, sorting, aggregation
 gen_asn_ranges.go              generator (build-time only, //go:build ignore)
 internal/asnreg/               ASN → RIR table (generated): whois host + RDAP base
 internal/radb/                 RADB WHOIS client (raw TCP, port 43)
+internal/cymrudns/             Team Cymru ASN DNS zone client (TXT query)
+internal/peeringdb/            PeeringDB organization lookup, single and batched (HTTPS)
 internal/rirwhois/             RIR WHOIS client + per-registry parsing
 internal/rdap/                 RIR RDAP client + jCard extraction
-internal/whoisfreaks/          WhoisFreaks organization lookup (HTTPS)
 internal/ratelimit/            token bucket + concurrency ceiling per upstream
 doc/networking.md              ports, egress, upstream rate limits and budgets
 doc/logging.md                 access log format, stats line, operational lines
@@ -505,7 +565,9 @@ doc/caching.md                 eviction bounds, coalescing, and memory per cache
 ```
 
 The packages expose narrow APIs — `radb.Query(ctx, asn)`,
-`whoisfreaks.LookupOrgName(ctx, asn, apiKey)`,
+`cymrudns.LookupOrgName(ctx, asn, resolverAddr)`,
+`peeringdb.LookupOrgName(ctx, asn, apiKey)`, `peeringdb.LookupOrgNames(ctx, asns, apiKey)`
+and `peeringdb.VerifyKey(ctx, apiKey)`,
 `rirwhois.LookupOrgName(ctx, reg, asn)`, `rdap.LookupOrgName(ctx, reg, asn)`,
 and `asnreg.Lookup(asn)` — and the main package
 reaches the network ones through overridable variables, so tests substitute all
@@ -573,7 +635,7 @@ The container honors a platform-supplied `PORT` and shuts down gracefully on
 `SIGTERM`, letting in-flight requests finish.
 
 ```bash
-docker run --rm -e PORT=9090 -e WHOISFREAKS_API_KEY=... -p 9090:9090 asn-ipv6-ranges
+docker run --rm -e PORT=9090 -e PEERINGDB_API_KEY=... -p 9090:9090 asn-ipv6-ranges
 ```
 
 > **Note:** the Docker image has not been built or tested — Docker was not
@@ -588,10 +650,17 @@ written by Claude from a series of prompts describing the desired behavior.
 
 What was verified during development:
 
-- The service was run against the live RADB WHOIS server, the WhoisFreaks ASN
-  API, and all five RIR whois servers; the documented request and response
-  examples are real output.
-- `go vet` and the unit test suite pass; tests make no network calls.
+- The service was run against the live RADB WHOIS server and all five RIR
+  whois servers; the documented request and response examples are real
+  output.
+- The Team Cymru DNS zone and PeeringDB adapters (single-ASN and, for
+  PeeringDB, the batched `/api/net`+`/api/org` path) were run against their
+  live services, including a concurrent-burst smoke test against real
+  PeeringDB traffic — the batching coordination bug described in
+  [doc/networking.md](doc/networking.md#outbound) was caught this way, not by
+  the unit tests alone.
+- `go vet`, `go test -race`, and the unit test suite pass; tests make no
+  network calls.
 - The IANA allocation table in `internal/asnreg/ranges_gen.go` was generated
   from both live sub-registries.
 
