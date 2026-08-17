@@ -324,7 +324,7 @@ through both CI systems.
 | `WHOISFREAKS_API_KEY` | — | Optional. When set, the WhoisFreaks API becomes the first `org` source tried; unset, `org` resolves from the ASN's registry instead. Not required for `org` to work. |
 | `ACCESS_LOG` | `1` | Request logging. Set `0`/`false` to disable. |
 | `ACCESS_LOG_PROBES` | `0` | Include `/-/status` in the access log. Useful when debugging probes. |
-| `MAX_INFLIGHT` | `32` | Concurrent requests held at once. Past it, requests get `503` with `Retry-After` rather than being queued. This is the hard bound on memory — raise it and the container memory limit together. |
+| `MAX_INFLIGHT` | `12` | Concurrent requests held at once. Past it, requests get `503` with `Retry-After` rather than being queued. Sized to the upstream concurrency budgets in [doc/networking.md](doc/networking.md), not to memory — raise it and the container memory limit together anyway, since it is still the front-door bound. |
 
 A value that isn't a recognized boolean logs a warning and keeps the default —
 misconfigured logging shouldn't stop the service from starting. `MAX_INFLIGHT`
@@ -390,19 +390,27 @@ the per-registry rate limits.
 
 ### Memory
 
-`MAX_INFLIGHT` (32 by default) and the per-response body cap are what bound
-memory from concurrent requests, independent of anything cached. Measured:
+`MAX_INFLIGHT` and the per-response body cap bound memory from concurrent
+requests, independent of anything cached — but for large-response memory
+specifically, the tighter and more relevant bound is each upstream's own
+concurrency budget (`radbBudget.concurrency = 3` for RADB, hit by every
+uncached request), not `MAX_INFLIGHT`: a spent budget fails fast rather than
+queuing, so at most 3 requests can ever be holding a near-cap RADB response at
+once, regardless of how many are inbound. See
+[doc/networking.md](doc/networking.md) for the measurement. Measured:
 
 | Scenario | RSS |
 | --- | --- |
 | Idle | 8 MB |
-| 64 concurrent requests for a 2.3 MB upstream response | 29 MB |
+| 32 concurrent requests for 32 distinct, uncached ASNs at the 8 MiB `radb.maxBody` cap | ~60 MB, from exactly 3 succeeding |
 
-The last row is twice what the service will now hold at once. A single RADB
-response is separately capped at 8 MiB, so concurrency cannot spike without
-bound. That cap is enforced rather than truncating: the largest real
-responses measured are 1.12 MB (AS3356) and 2.43 MB (AS4134), and a response
-over the cap returns an error instead of a silently shortened prefix list.
+That row is the demonstration, not a scaling factor: raising `MAX_INFLIGHT`
+past 12 would not raise it further, since RADB's own budget — not
+`MAX_INFLIGHT` — is what stops at 3. A single RADB response is separately
+capped at 8 MiB, so concurrency cannot spike without bound regardless. That
+cap is enforced rather than truncating: the largest real responses measured
+are 1.12 MB (AS3356) and 2.43 MB (AS4134), and a response over the cap
+returns an error instead of a silently shortened prefix list.
 
 The supplied Kubernetes manifest sets `limits.memory: 96Mi` with
 `GOMEMLIMIT=80MiB`, so the Go GC works harder as it approaches the ceiling

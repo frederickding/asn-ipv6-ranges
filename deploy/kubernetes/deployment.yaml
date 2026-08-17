@@ -66,22 +66,16 @@ spec:
           env:
             - name: PORT
               value: "8080"
-            # Soft ceiling kept below limits.memory: past it the Go GC works
-            # harder instead of the kernel OOM-killing the pod. Leaves ~16Mi of
-            # the limit as headroom for allocations the GC cannot defer.
+            # Soft ceiling below limits.memory: GC works harder instead of the
+            # kernel OOM-killing the pod. See doc/networking.md.
             - name: GOMEMLIMIT
               value: "80MiB"
-            # Concurrent requests this pod will hold; past it, requests are
-            # answered 503 with Retry-After rather than queued. This is the
-            # hard bound on memory, because a request's cost is dominated by
-            # the upstream response it holds (capped at 8Mi by radb.maxBody).
-            # Raise it and limits.memory together, never alone.
-            #
-            # It is per pod, as are the per-registry outbound query budgets in
-            # upstream.go: with replicas: 2, a registry sees twice what one pod
-            # is allowed. See doc/networking.md.
+            # Concurrent requests held at once; past it, 503 with Retry-After
+            # rather than queueing. Sized to the upstream concurrency budgets
+            # in upstream.go, not to memory. Per pod — replicas: 2 doubles
+            # what a registry sees. See doc/networking.md.
             - name: MAX_INFLIGHT
-              value: "32"
+              value: "12"
             # Optional. Absent or empty, ?org=1 falls back to RIR WHOIS/RDAP
             # and says so in a # comment. optional: true means the pod still
             # starts when the Secret does not exist, so the key stays out of
@@ -138,30 +132,12 @@ spec:
           resources:
             requests:
               cpu: 10m
-              # Typical steady state is ~15Mi: an 8Mi binary baseline plus a
-              # full 256-entry prefix cache of ordinary ASNs (~0.5Mi at 50
-              # prefixes each, ~1.6Mi at 200). The org cache's 512 entries
-              # add negligible memory on top — see doc/caching.md.
+              # Typical steady state. See doc/caching.md.
               memory: 32Mi
             limits:
-              # 96Mi covers the measured pathological case with ~1.9x headroom.
-              # Both caches are hard-capped — the prefix cache at 256 entries,
-              # the org cache at 512 — and swept hourly, so the ceiling is
-              # bounded rather than growing with traffic. The org cache's
-              # entries are a couple of short strings each, not a prefix
-              # list, so its larger capacity adds negligible memory; the
-              # pathological case below is entirely the prefix cache. See
-              # doc/caching.md.
-              #
-              #   256 prefix-cache entries x 2000 prefixes each  51Mi   (no real
-              #                                       ASN is anywhere near this)
-              #   32 concurrent large-ASN requests    15Mi
-              #   idle                                 8Mi
-              #
-              # A single upstream response is separately capped at 8Mi by
-              # radb.maxBody, and MAX_INFLIGHT caps how many of those the pod
-              # holds at once, so concurrency cannot spike without bound.
-              memory: 96Mi
+              # Conservative headroom over the pathological-case estimates in
+              # doc/caching.md and doc/networking.md.
+              memory: 128Mi
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

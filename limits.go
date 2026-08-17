@@ -10,18 +10,31 @@ import (
 const (
 	// defaultMaxInflight bounds concurrent requests, and through them memory.
 	//
-	// The binding cost is the upstream response: internal/radb caps a body at
-	// 8 MiB, and a request holds that plus the prefixes parsed out of it. Go's
-	// default is one goroutine per connection with no ceiling, so without this
-	// a burst of requests for large ASNs walks straight past GOMEMLIMIT and the
-	// container's memory limit, and the pod is OOM-killed. Trading a 503 for a
-	// restart is the right side of that bargain: a shed request is one client's
-	// error, a restart drops every in-flight request and empties the cache.
+	// Go's default is one goroutine per connection with no ceiling, so without
+	// this a burst of requests for large ASNs walks straight past GOMEMLIMIT
+	// and the container's memory limit, and the pod is OOM-killed. Trading a
+	// 503 for a restart is the right side of that bargain: a shed request is
+	// one client's error, a restart drops every in-flight request and empties
+	// the cache.
 	//
-	// 32 is sized against the 80 MiB GOMEMLIMIT in the manifest, assuming the
-	// common case of responses far below the 8 MiB cap. Raise it and the memory
+	// 32 was never a real ceiling, though — it was sized against memory alone,
+	// ignoring that every uncached request also has to clear a per-upstream
+	// budget in upstream.go before it does any real work. RADB's is the tight
+	// one, radbBudget.concurrency = 3, and it is hit by every request this
+	// service serves, cached org lookups aside. A live measurement makes the
+	// gap concrete: 12 concurrent requests for 12 distinct, uncached real ASNs
+	// produced exactly 3 successes (0.17s, 1.24s, 3.35s) and 9 immediate
+	// sub-5ms 503s — the other 29 slots a limit of 32 would have reserved were
+	// never reachable, since a spent budget fails fast rather than queuing.
+	//
+	// 12 is the sum of every upstream's own concurrency ceiling — radb(3) +
+	// lacnic(2) + ripe(2) + registry(2) + api(2) = 11, rounded up by one — so a
+	// burst that legitimately maxes out every registry at once (a mixed batch
+	// of org=1 requests, say) still finds a free slot, with the remainder
+	// available for cache hits, which never touch a budget at all and are the
+	// traffic this number should actually flex for. Raise it and the memory
 	// limit together, never alone.
-	defaultMaxInflight = 32
+	defaultMaxInflight = 12
 
 	// inflightRetryAfter is advertised on a shed request. Requests are shed
 	// because the process is momentarily saturated, which is a condition that

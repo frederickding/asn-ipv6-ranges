@@ -31,15 +31,26 @@ only, never from a body, so nothing is gained by POSTing to it.
 | `WriteTimeout` | 30s | A client that stops reading mid-response and pins a goroutine holding a large prefix list. |
 | `IdleTimeout` | 60s | Keep-alive connections accumulating unused. |
 | `MaxHeaderBytes` | 16 KiB | Go's 1 MB default reaching the [access log](logging.md)'s escaper on every request. |
-| `MAX_INFLIGHT` | 32 | Concurrent requests, and through them memory. |
+| `MAX_INFLIGHT` | 12 | Concurrent requests, and through them memory. |
 | Request deadline | 20s | The total time one request may spend on upstream calls. |
 
-`MAX_INFLIGHT` is the front-door bound. A request's cost is dominated by the
-upstream response it holds — capped at 8 MiB for RADB — so without a ceiling on
-concurrency a burst of requests for large ASNs walks past `GOMEMLIMIT` and the
-pod is OOM-killed. Past the cap, requests are answered **`503` with
-`Retry-After: 1`**, not queued: queueing would hold the goroutine and buffers
-that the cap exists to limit.
+`MAX_INFLIGHT` is the front-door bound, but it is not what actually caps
+concurrent large-response memory — the per-upstream budgets below are. Every
+uncached request needs a budget slot before it does any real work, and a spent
+budget fails fast (`503`) rather than queuing, so at most `radbBudget.concurrency`
+(3) requests can ever be holding a RADB response at once regardless of
+`MAX_INFLIGHT`. Measured: 32 concurrent requests for 32 distinct, uncached
+real ASNs sitting at the 8 MiB `radb.maxBody` cap produced exactly 3 successes
+and 9 immediate sub-5ms `503`s — the rest of a larger `MAX_INFLIGHT` would
+never have been reachable.
+
+12 is sized to that reality: the sum of every upstream's own concurrency
+ceiling (radb 3 + lacnic 2 + ripe 2 + registry 2 + api 2 = 11, +1 headroom), so
+a burst that legitimately maxes out every registry at once still finds a free
+slot, with the rest available for cache hits — which never touch a budget and
+are the traffic this number should flex for. Past the cap, requests are
+answered **`503` with `Retry-After: 1`**, not queued: queueing would hold the
+goroutine and buffers that the cap exists to limit.
 
 `/-/status` is exempt from the cap. Shedding a readiness probe under load would
 depool a pod that is behaving exactly as designed, turning overload into an
