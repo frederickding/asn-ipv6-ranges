@@ -67,14 +67,24 @@ func aggregateStrings(input string) []string {
 // whoisQuery directly.
 func swapTestHooks(t *testing.T, clock *time.Time, query func(string) (string, error)) {
 	t.Helper()
-	origQuery, origAPI, origRIR, origRDAP := whoisQuery, orgAPILookup, orgRIRLookup, orgRDAPLookup
+	origQuery := whoisQuery
+	origCymru, origPeeringDB, origPeeringDBBatch := orgCymruLookup, orgPeeringDBLookup, orgPeeringDBBatchLookup
+	origRIR, origRDAP := orgRIRLookup, orgRDAPLookup
 	origNow, origGetenv := nowFunc, getenv
 
 	whoisQuery = func(_ context.Context, asn string) (string, error) { return query(asn) }
 	nowFunc = func() time.Time { return *clock }
-	orgAPILookup = func(context.Context, string, string) (string, error) {
-		t.Error("WhoisFreaks API called without an explicit test hook")
-		return "", errors.New("unexpected API lookup")
+	orgCymruLookup = func(context.Context, string, string) (string, error) {
+		t.Error("Cymru DNS called without an explicit test hook")
+		return "", errors.New("unexpected Cymru lookup")
+	}
+	orgPeeringDBLookup = func(context.Context, string, string) (string, error) {
+		t.Error("PeeringDB called without an explicit test hook")
+		return "", errors.New("unexpected PeeringDB lookup")
+	}
+	orgPeeringDBBatchLookup = func(context.Context, []string, string) (map[string]string, error) {
+		t.Error("PeeringDB batch called without an explicit test hook")
+		return nil, errors.New("unexpected PeeringDB batch lookup")
 	}
 	orgRIRLookup = func(context.Context, asnreg.Registry, string) (string, error) {
 		t.Error("RIR whois called without an explicit test hook")
@@ -103,8 +113,17 @@ func swapTestHooks(t *testing.T, clock *time.Time, query func(string) (string, e
 	budgetFor = func(string) budget { return unlimitedBudget }
 	resetLimiters()
 
+	// The PeeringDB batcher's pending queue is process-wide too; a
+	// queued-but-never-drained request from one test could leak into the next.
+	peeringdbBatchMu.Lock()
+	peeringdbPending = nil
+	peeringdbBusy = false
+	peeringdbBatchMu.Unlock()
+
 	t.Cleanup(func() {
-		whoisQuery, orgAPILookup, orgRIRLookup, orgRDAPLookup = origQuery, origAPI, origRIR, origRDAP
+		whoisQuery = origQuery
+		orgCymruLookup, orgPeeringDBLookup, orgPeeringDBBatchLookup = origCymru, origPeeringDB, origPeeringDBBatch
+		orgRIRLookup, orgRDAPLookup = origRIR, origRDAP
 		nowFunc, getenv = origNow, origGetenv
 		budgetFor = origBudgetFor
 		resetCaches()

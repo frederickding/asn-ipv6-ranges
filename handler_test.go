@@ -11,7 +11,8 @@ import (
 	"time"
 
 	"asn-ipv6-ranges/internal/asnreg"
-	"asn-ipv6-ranges/internal/whoisfreaks"
+	"asn-ipv6-ranges/internal/cymrudns"
+	"asn-ipv6-ranges/internal/peeringdb"
 )
 
 func TestASHandlerValidation(t *testing.T) {
@@ -172,8 +173,7 @@ func TestASHandlerOrgSources(t *testing.T) {
 	t.Run("not requested by default", func(t *testing.T) {
 		clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 		swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })
-		getenv = func(string) string { return "secret-key" }
-		orgAPILookup = func(context.Context, string, string) (string, error) {
+		orgCymruLookup = func(context.Context, string, string) (string, error) {
 			t.Error("org lookup ran without ?org=1")
 			return "", nil
 		}
@@ -188,33 +188,56 @@ func TestASHandlerOrgSources(t *testing.T) {
 		}
 	})
 
-	t.Run("auto prefers the API when a key is set", func(t *testing.T) {
+	t.Run("auto prefers Cymru DNS", func(t *testing.T) {
 		clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 		swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })
-		getenv = func(name string) string {
-			if name != whoisfreaks.KeyEnv {
-				t.Errorf("read unexpected env var %q", name)
-			}
-			return "secret-key"
+		orgCymruLookup = func(context.Context, string, string) (string, error) { return "From Cymru", nil }
+		orgPeeringDBLookup = func(context.Context, string, string) (string, error) {
+			t.Error("PeeringDB queried even though Cymru DNS succeeded")
+			return "", nil
 		}
-		orgAPILookup = func(context.Context, string, string) (string, error) { return "From API", nil }
 		orgRIRLookup = func(context.Context, asnreg.Registry, string) (string, error) {
-			t.Error("whois queried even though the API succeeded")
+			t.Error("whois queried even though Cymru DNS succeeded")
 			return "", nil
 		}
 
 		rec := httptest.NewRecorder()
 		asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/"+arinASN+"?org=1", nil))
 
-		if !hasComment(rec.Body.String(), "# org: From API (source: "+whoisfreaks.Host+")") {
-			t.Errorf("missing API-sourced org comment in:\n%s", rec.Body.String())
+		if !hasComment(rec.Body.String(), "# org: From Cymru (source: "+cymrudns.Host+")") {
+			t.Errorf("missing Cymru-sourced org comment in:\n%s", rec.Body.String())
 		}
 	})
 
-	t.Run("auto uses the registry when no key is configured", func(t *testing.T) {
+	t.Run("auto falls back to PeeringDB when Cymru DNS fails", func(t *testing.T) {
 		clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 		swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })
-		getenv = func(string) string { return "" }
+		orgCymruLookup = func(context.Context, string, string) (string, error) {
+			return "", errors.New("no TXT record")
+		}
+		orgPeeringDBLookup = func(context.Context, string, string) (string, error) { return "From PeeringDB", nil }
+		orgRIRLookup = func(context.Context, asnreg.Registry, string) (string, error) {
+			t.Error("whois queried even though PeeringDB succeeded")
+			return "", nil
+		}
+
+		rec := httptest.NewRecorder()
+		asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/"+arinASN+"?org=1", nil))
+
+		if !hasComment(rec.Body.String(), "# org: From PeeringDB (source: "+peeringdb.Host+")") {
+			t.Errorf("missing PeeringDB-sourced org comment in:\n%s", rec.Body.String())
+		}
+	})
+
+	t.Run("auto uses the registry when Cymru DNS and PeeringDB both fail", func(t *testing.T) {
+		clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+		swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })
+		orgCymruLookup = func(context.Context, string, string) (string, error) {
+			return "", errors.New("no TXT record")
+		}
+		orgPeeringDBLookup = func(context.Context, string, string) (string, error) {
+			return "", errors.New("no organization found")
+		}
 		orgRIRLookup = func(_ context.Context, reg asnreg.Registry, asn string) (string, error) {
 			if reg.Name != "ARIN" {
 				t.Errorf("resolved against %q, want ARIN", reg.Name)
@@ -230,45 +253,35 @@ func TestASHandlerOrgSources(t *testing.T) {
 		}
 	})
 
-	t.Run("src=api forces the API", func(t *testing.T) {
+	t.Run("src=cymru forces Cymru DNS", func(t *testing.T) {
 		clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 		swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })
-		getenv = func(string) string { return "secret-key" }
-		orgAPILookup = func(context.Context, string, string) (string, error) { return "From API", nil }
+		orgCymruLookup = func(context.Context, string, string) (string, error) { return "From Cymru", nil }
 
 		rec := httptest.NewRecorder()
-		asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/"+arinASN+"?org=1&src=api", nil))
+		asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/"+arinASN+"?org=1&src=cymru", nil))
 
-		if !hasComment(rec.Body.String(), "# org: From API (source: "+whoisfreaks.Host+")") {
+		if !hasComment(rec.Body.String(), "# org: From Cymru (source: "+cymrudns.Host+")") {
 			t.Errorf("got:\n%s", rec.Body.String())
 		}
 	})
 
-	t.Run("src=api without a key reports why", func(t *testing.T) {
+	t.Run("src=peeringdb forces PeeringDB", func(t *testing.T) {
 		clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 		swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })
-		getenv = func(string) string { return "" }
+		orgPeeringDBLookup = func(context.Context, string, string) (string, error) { return "From PeeringDB", nil }
 
 		rec := httptest.NewRecorder()
-		asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/"+arinASN+"?org=1&src=api", nil))
+		asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/"+arinASN+"?org=1&src=peeringdb", nil))
 
-		if rec.Code != http.StatusOK {
-			t.Errorf("org failure must not fail the request, got %d", rec.Code)
-		}
-		want := "# org: lookup failed: api selected but WHOISFREAKS_API_KEY is not set"
-		if !hasComment(rec.Body.String(), want) {
+		if !hasComment(rec.Body.String(), "# org: From PeeringDB (source: "+peeringdb.Host+")") {
 			t.Errorf("got:\n%s", rec.Body.String())
 		}
 	})
 
-	t.Run("src=whois forces whois even with a key", func(t *testing.T) {
+	t.Run("src=whois forces whois", func(t *testing.T) {
 		clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 		swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })
-		getenv = func(string) string { return "secret-key" }
-		orgAPILookup = func(context.Context, string, string) (string, error) {
-			t.Error("API called despite src=whois")
-			return "", nil
-		}
 		orgRIRLookup = func(context.Context, asnreg.Registry, string) (string, error) { return "From whois", nil }
 
 		rec := httptest.NewRecorder()
@@ -279,14 +292,9 @@ func TestASHandlerOrgSources(t *testing.T) {
 		}
 	})
 
-	t.Run("src=rdap forces RDAP even with a key", func(t *testing.T) {
+	t.Run("src=rdap forces RDAP", func(t *testing.T) {
 		clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 		swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })
-		getenv = func(string) string { return "secret-key" }
-		orgAPILookup = func(context.Context, string, string) (string, error) {
-			t.Error("API called despite src=rdap")
-			return "", nil
-		}
 		orgRIRLookup = func(context.Context, asnreg.Registry, string) (string, error) {
 			t.Error("whois called despite src=rdap")
 			return "", nil
@@ -306,9 +314,12 @@ func TestASHandlerOrgSources(t *testing.T) {
 	t.Run("explicit source does not fall back", func(t *testing.T) {
 		clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 		swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })
-		getenv = func(string) string { return "secret-key" }
-		orgAPILookup = func(context.Context, string, string) (string, error) {
-			t.Error("API used as a fallback despite src=whois")
+		orgCymruLookup = func(context.Context, string, string) (string, error) {
+			t.Error("Cymru DNS used as a fallback despite src=whois")
+			return "Should Not Appear", nil
+		}
+		orgPeeringDBLookup = func(context.Context, string, string) (string, error) {
+			t.Error("PeeringDB used as a fallback despite src=whois")
 			return "Should Not Appear", nil
 		}
 		orgRDAPLookup = func(context.Context, asnreg.Registry, string) (string, error) {
@@ -360,7 +371,12 @@ func TestASHandlerOrgSources(t *testing.T) {
 	t.Run("multiline org name cannot inject output lines", func(t *testing.T) {
 		clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 		swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })
-		getenv = func(string) string { return "" }
+		orgCymruLookup = func(context.Context, string, string) (string, error) {
+			return "", errors.New("no TXT record")
+		}
+		orgPeeringDBLookup = func(context.Context, string, string) (string, error) {
+			return "", errors.New("no organization found")
+		}
 		orgRIRLookup = func(context.Context, asnreg.Registry, string) (string, error) {
 			return "Evil Corp\n2001:dead::/32", nil
 		}
@@ -378,11 +394,10 @@ func TestASHandlerOrgSources(t *testing.T) {
 	t.Run("results are cached per source", func(t *testing.T) {
 		clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 		swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })
-		getenv = func(string) string { return "secret-key" }
-		apiCalls, rdapCalls := 0, 0
-		orgAPILookup = func(context.Context, string, string) (string, error) {
-			apiCalls++
-			return "From API", nil
+		cymruCalls, rdapCalls := 0, 0
+		orgCymruLookup = func(context.Context, string, string) (string, error) {
+			cymruCalls++
+			return "From Cymru", nil
 		}
 		orgRDAPLookup = func(context.Context, asnreg.Registry, string) (string, error) {
 			rdapCalls++
@@ -398,8 +413,8 @@ func TestASHandlerOrgSources(t *testing.T) {
 		for i := 0; i < 3; i++ {
 			get("?org=1")
 		}
-		if apiCalls != 1 {
-			t.Errorf("metered API called %d times, want 1", apiCalls)
+		if cymruCalls != 1 {
+			t.Errorf("Cymru DNS called %d times, want 1", cymruCalls)
 		}
 
 		// A different source must not be served the cached auto answer.
@@ -409,14 +424,14 @@ func TestASHandlerOrgSources(t *testing.T) {
 		if rdapCalls != 1 {
 			t.Errorf("RDAP called %d times, want 1", rdapCalls)
 		}
-		if body := get("?org=1"); !hasComment(body, "# org: From API (source: "+whoisfreaks.Host+")") {
+		if body := get("?org=1"); !hasComment(body, "# org: From Cymru (source: "+cymrudns.Host+")") {
 			t.Errorf("auto request served the forced answer:\n%s", body)
 		}
 
 		clock = clock.Add(orgCacheTTL + time.Second)
 		get("?org=1")
-		if apiCalls != 2 {
-			t.Errorf("expected refresh after TTL, got %d API calls", apiCalls)
+		if cymruCalls != 2 {
+			t.Errorf("expected refresh after TTL, got %d Cymru DNS calls", cymruCalls)
 		}
 	})
 }
@@ -438,7 +453,12 @@ func TestOrgAutoOrdering(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 			swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })
-			getenv = func(string) string { return "" } // no key: registry sources only
+			orgCymruLookup = func(context.Context, string, string) (string, error) {
+				return "", errors.New("no TXT record")
+			}
+			orgPeeringDBLookup = func(context.Context, string, string) (string, error) {
+				return "", errors.New("no organization found")
+			}
 
 			var order []string
 			orgRIRLookup = func(context.Context, asnreg.Registry, string) (string, error) {
@@ -477,7 +497,12 @@ func TestOrgAutoFallsThrough(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 			swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })
-			getenv = func(string) string { return "" }
+			orgCymruLookup = func(context.Context, string, string) (string, error) {
+				return "", errors.New("no TXT record")
+			}
+			orgPeeringDBLookup = func(context.Context, string, string) (string, error) {
+				return "", errors.New("no organization found")
+			}
 
 			var order []string
 			// The preferred source fails; the other must still answer.
@@ -506,6 +531,68 @@ func TestOrgAutoFallsThrough(t *testing.T) {
 				t.Errorf("fallback answer missing:\n%s", rec.Body.String())
 			}
 		})
+	}
+}
+
+// TestOrgAutoFullChainOrder pins the whole auto chain's order across all four
+// sources: Cymru DNS, then PeeringDB, then whichever registry source
+// preferRDAP picks first.
+func TestOrgAutoFullChainOrder(t *testing.T) {
+	clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })
+
+	var order []string
+	orgCymruLookup = func(context.Context, string, string) (string, error) {
+		order = append(order, "cymru")
+		return "", errors.New("no TXT record")
+	}
+	orgPeeringDBLookup = func(context.Context, string, string) (string, error) {
+		order = append(order, "peeringdb")
+		return "", errors.New("no organization found")
+	}
+	orgRIRLookup = func(context.Context, asnreg.Registry, string) (string, error) {
+		order = append(order, "whois")
+		return "From whois", nil
+	}
+	orgRDAPLookup = func(context.Context, asnreg.Registry, string) (string, error) {
+		order = append(order, "rdap")
+		return "From whois", nil
+	}
+
+	rec := httptest.NewRecorder()
+	asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/"+arinASN+"?org=1", nil))
+
+	want := []string{"cymru", "peeringdb", "whois"} // ARIN prefers whois over RDAP
+	if !slices.Equal(order, want) {
+		t.Errorf("order %v, want %v", order, want)
+	}
+	if !hasComment(rec.Body.String(), "# org: From whois (source: whois.arin.net)") {
+		t.Errorf("got:\n%s", rec.Body.String())
+	}
+}
+
+// TestOrgAutoEmptyNameFallsThrough: Cymru and PeeringDB both treat an empty
+// org name as an error internally (see internal/cymrudns and
+// internal/peeringdb), so an empty name from either must fall through to the
+// next source exactly like any other failure — not be reported as a blank
+// "# org:" comment.
+func TestOrgAutoEmptyNameFallsThrough(t *testing.T) {
+	clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })
+
+	orgCymruLookup = func(context.Context, string, string) (string, error) {
+		return "", errors.New("no organization name in response") // empty AS Name field
+	}
+	orgPeeringDBLookup = func(context.Context, string, string) (string, error) {
+		return "", errors.New("no organization found for AS2906: empty name")
+	}
+	orgRIRLookup = func(context.Context, asnreg.Registry, string) (string, error) { return "From whois", nil }
+
+	rec := httptest.NewRecorder()
+	asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/"+arinASN+"?org=1", nil))
+
+	if !hasComment(rec.Body.String(), "# org: From whois (source: whois.arin.net)") {
+		t.Errorf("empty names from Cymru/PeeringDB did not fall through:\n%s", rec.Body.String())
 	}
 }
 

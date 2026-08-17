@@ -12,11 +12,12 @@ import (
 	"time"
 
 	"asn-ipv6-ranges/internal/asnreg"
+	"asn-ipv6-ranges/internal/cymrudns"
+	"asn-ipv6-ranges/internal/peeringdb"
 	"asn-ipv6-ranges/internal/radb"
 	"asn-ipv6-ranges/internal/ratelimit"
 	"asn-ipv6-ranges/internal/rdap"
 	"asn-ipv6-ranges/internal/rirwhois"
-	"asn-ipv6-ranges/internal/whoisfreaks"
 )
 
 // Cache bounds. For each cache these are three separate limits, and it is
@@ -57,23 +58,26 @@ const (
 
 // Org sources, as selected by the src request parameter.
 const (
-	srcAuto  = "auto"
-	srcAPI   = "api"
-	srcWHOIS = "whois"
-	srcRDAP  = "rdap"
+	srcAuto      = "auto"
+	srcCymru     = "cymru"
+	srcPeeringDB = "peeringdb"
+	srcWHOIS     = "whois"
+	srcRDAP      = "rdap"
 )
 
 // orgSources lists the valid src values, for validation and error messages.
-var orgSources = []string{srcAuto, srcAPI, srcWHOIS, srcRDAP}
+var orgSources = []string{srcAuto, srcCymru, srcPeeringDB, srcWHOIS, srcRDAP}
 
 // Seams overridden in tests to avoid real network calls and real waiting.
 var (
-	whoisQuery    = radb.Query
-	orgAPILookup  = whoisfreaks.LookupOrgName
-	orgRIRLookup  = rirwhois.LookupOrgName
-	orgRDAPLookup = rdap.LookupOrgName
-	nowFunc       = time.Now
-	getenv        = os.Getenv
+	whoisQuery              = radb.Query
+	orgCymruLookup          = cymrudns.LookupOrgName
+	orgPeeringDBLookup      = peeringdb.LookupOrgName
+	orgPeeringDBBatchLookup = peeringdb.LookupOrgNames
+	orgRIRLookup            = rirwhois.LookupOrgName
+	orgRDAPLookup           = rdap.LookupOrgName
+	nowFunc                 = time.Now
+	getenv                  = os.Getenv
 )
 
 // budgetError reports that an upstream's query budget is spent. It carries the
@@ -435,20 +439,21 @@ func preferRDAP(reg asnreg.Registry) bool {
 
 // resolveOrgName picks a source for the organization name.
 //
-// With src auto, the WhoisFreaks API is tried first when a key is configured,
-// then the two registry sources in the order preferRDAP chooses. An explicit
-// src uses only that source and never falls back, so the parameter can be
-// trusted to exercise one path.
+// With src auto, Cymru's DNS zone is tried first, then PeeringDB, then the
+// two registry sources in the order preferRDAP chooses. Cymru and PeeringDB
+// both treat an empty org name as an error internally, so this loop's normal
+// "try the next source on any error" behavior already produces the
+// empty-name fallback for free. An explicit src uses only that source and
+// never falls back, so the parameter can be trusted to exercise one path.
 func resolveOrgName(ctx context.Context, asn string, v uint64, src string) (orgResult, error) {
 	reg, haveRegistry := asnreg.Lookup(v)
 
 	switch src {
-	case srcAPI:
-		apiKey := getenv(whoisfreaks.KeyEnv)
-		if apiKey == "" {
-			return orgResult{}, fmt.Errorf("api selected but %s is not set", whoisfreaks.KeyEnv)
-		}
-		return lookupAPI(ctx, asn, apiKey)
+	case srcCymru:
+		return lookupCymru(ctx, asn)
+
+	case srcPeeringDB:
+		return lookupPeeringDBBatched(ctx, asn)
 
 	case srcWHOIS:
 		if !haveRegistry {
@@ -464,13 +469,19 @@ func resolveOrgName(ctx context.Context, asn string, v uint64, src string) (orgR
 	}
 
 	// src auto: try each available source in turn, reporting every failure if
-	// none succeeds.
+	// none succeeds. Cymru/PeeringDB are the cheap sources positioned to
+	// protect the registries, so — unlike the registry loop below — a budget
+	// refusal from either one is not a reason to stop early; falling through
+	// to the next source (even eventually a registry) is exactly the point.
 	var errs []error
-	if apiKey := getenv(whoisfreaks.KeyEnv); apiKey != "" {
-		res, err := lookupAPI(ctx, asn, apiKey)
-		if err == nil {
-			return res, nil
-		}
+	if res, err := lookupCymru(ctx, asn); err == nil {
+		return res, nil
+	} else {
+		errs = append(errs, err)
+	}
+	if res, err := lookupPeeringDB(ctx, asn); err == nil {
+		return res, nil
+	} else {
 		errs = append(errs, err)
 	}
 
@@ -501,14 +512,26 @@ func resolveOrgName(ctx context.Context, asn string, v uint64, src string) (orgR
 	return orgResult{}, errors.Join(errs...)
 }
 
-func lookupAPI(ctx context.Context, asn, apiKey string) (orgResult, error) {
-	name, err := withUpstreamBudget(whoisfreaks.Host, func() (string, error) {
-		return orgAPILookup(ctx, asn, apiKey)
+func lookupCymru(ctx context.Context, asn string) (orgResult, error) {
+	resolver := getenv(cymrudns.ResolverEnv)
+	name, err := withUpstreamBudget(cymrudns.Host, func() (string, error) {
+		return orgCymruLookup(ctx, asn, resolver)
 	})
 	if err != nil {
-		return orgResult{}, fmt.Errorf("%s: %w", whoisfreaks.Host, err)
+		return orgResult{}, fmt.Errorf("%s: %w", cymrudns.Host, err)
 	}
-	return orgResult{name: name, source: whoisfreaks.Host}, nil
+	return orgResult{name: name, source: cymrudns.Host}, nil
+}
+
+func lookupPeeringDB(ctx context.Context, asn string) (orgResult, error) {
+	apiKey := getenv(peeringdb.KeyEnv)
+	name, err := withUpstreamBudget(peeringdb.Host, func() (string, error) {
+		return orgPeeringDBLookup(ctx, asn, apiKey)
+	})
+	if err != nil {
+		return orgResult{}, fmt.Errorf("%s: %w", peeringdb.Host, err)
+	}
+	return orgResult{name: name, source: peeringdb.Host}, nil
 }
 
 // lookupWHOIS spends one token per lookup even though rirwhois may issue a

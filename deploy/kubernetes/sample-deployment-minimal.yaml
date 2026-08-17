@@ -19,8 +19,6 @@ spec:
           env:
             - name: PORT
               value: "80"
-            - name: WHOISFREAKS_API_KEY
-              value: ""
           ports:
             - name: http
               containerPort: 80

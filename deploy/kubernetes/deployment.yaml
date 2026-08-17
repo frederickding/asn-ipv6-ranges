@@ -7,8 +7,8 @@
 # and a non-root process cannot bind below 1024 without NET_BIND_SERVICE.
 #
 # Health probes hit /-/status, which answers from process state alone and never
-# queries RADB, a RIR, or WhoisFreaks. A third-party outage therefore cannot
-# fail the probe and get healthy pods restarted or depooled.
+# queries RADB, a RIR, Cymru, or PeeringDB. A third-party outage therefore
+# cannot fail the probe and get healthy pods restarted or depooled.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -75,18 +75,18 @@ spec:
             # in upstream.go, not to memory. Per pod — replicas: 2 doubles
             # what a registry sees. See doc/networking.md.
             - name: MAX_INFLIGHT
-              value: "12"
-            # Optional. Absent or empty, ?org=1 falls back to RIR WHOIS/RDAP
-            # and says so in a # comment. optional: true means the pod still
-            # starts when the Secret does not exist, so the key stays out of
-            # this file:
+              value: "20"
+            # Optional. Absent or empty, the org lookup runs against PeeringDB
+            # anonymously (a lower rate limit) rather than failing. optional:
+            # true means the pod still starts when the Secret does not exist,
+            # so the key stays out of this file:
             #   kubectl create secret generic asn-ipv6-ranges \
-            #     --from-literal=whoisfreaks-api-key=<KEY>
-            - name: WHOISFREAKS_API_KEY
+            #     --from-literal=peeringdb-api-key=<KEY>
+            - name: PEERINGDB_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: asn-ipv6-ranges
-                  key: whoisfreaks-api-key
+                  key: peeringdb-api-key
                   optional: true
           ports:
             - name: http
