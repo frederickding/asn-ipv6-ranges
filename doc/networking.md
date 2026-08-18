@@ -104,6 +104,12 @@ Queried on TCP port 43 with an inverse lookup on origin, terminated by CRLF:
 The response is scanned for `route6:` attributes. Defined in
 `internal/radb/radb.go`.
 
+RADB is the narrowest upstream here and the only source of prefixes, so a
+failure degrades before it errors: when the budget is spent or RADB is
+unreachable, an expired-but-retained cache entry is served with `200` in
+preference to a `503`, since that costs RADB nothing and an error would only
+invite a retry. See [caching.md](caching.md#serving-stale-entries).
+
 ### Team Cymru DNS zone — organization names
 
 One DNS TXT query, over the resolver in `CYMRU_DNS_RESOLVER` (default

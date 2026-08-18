@@ -37,6 +37,24 @@ func singleLine(s string) string {
 	return strings.TrimSpace(s)
 }
 
+// humanAge renders a duration for the EXPIRED annotation: "45s", "18m",
+// "1h3m". time.Duration.String is unusable here — it would render 18 minutes
+// as "18m0s" — and the prefix cache's retention bound keeps this under a
+// couple of hours, so three cases cover it.
+func humanAge(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	default:
+		return fmt.Sprintf("%dh%dm", int(d.Hours()), int(d.Minutes())%60)
+	}
+}
+
 // parseBoolParam reads a GET toggle. Reading from r.URL.Query rather than
 // r.FormValue keeps these strictly GET parameters: the URL query is the only
 // source consulted, never a request body.
@@ -103,6 +121,16 @@ func asHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	orgSrc = canonicalOrgSource(orgSrc)
+	// Defaults on: an expired-but-held prefix list beats an error whenever
+	// RADB cannot be reached, and costs it nothing. Deliberately documented in
+	// doc/caching.md and not in the README — a client that sets stale=0 as a
+	// matter of course turns every upstream hiccup back into an error plus the
+	// retry that follows it, which is the load this default exists to avoid.
+	allowStale, err := parseBoolParam(r, "stale", true)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "%v", err)
+		return
+	}
 
 	// One deadline for every upstream call this request makes, cancelled with
 	// the request itself: a client that disconnects must not leave queries
@@ -114,13 +142,13 @@ func asHandler(w http.ResponseWriter, r *http.Request) {
 	// still leaves something worth answering: the org name comes from an
 	// unrelated source, and the client explicitly asked for it. Every other
 	// failure sinks the request as before.
-	prefixes, queriedAt, prefixesErr := getPrefixes(ctx, asn)
+	res, prefixesErr := getPrefixes(ctx, asn, allowStale)
 	if prefixesErr != nil && !(wantOrg && errors.Is(prefixesErr, radb.ErrTooLarge)) {
 		writeUpstreamError(w, "whois query failed", prefixesErr)
 		return
 	}
 	if aggregate && prefixesErr == nil {
-		prefixes = aggregatePrefixes(prefixes)
+		res.prefixes = aggregatePrefixes(res.prefixes)
 	}
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -137,10 +165,10 @@ func asHandler(w http.ResponseWriter, r *http.Request) {
 	case wantOrg:
 		// An org lookup failure must not sink the prefix list, and an
 		// oversized prefix response must not sink the org lookup.
-		if res, err := getOrgName(ctx, asn, v, orgSrc); err != nil {
+		if org, err := getOrgName(ctx, asn, v, orgSrc); err != nil {
 			fmt.Fprintf(b, "# org: lookup failed: %s\n", singleLine(err.Error()))
 		} else {
-			fmt.Fprintf(b, "# org: %s (source: %s)\n", singleLine(res.name), res.source)
+			fmt.Fprintf(b, "# org: %s (source: %s)\n", singleLine(org.name), org.source)
 		}
 	case r.URL.Query().Get("src") != "":
 		b.WriteString("# src: ignored (org lookup not requested)\n")
@@ -154,16 +182,24 @@ func asHandler(w http.ResponseWriter, r *http.Request) {
 	} else {
 		b.WriteString("# aggregate: off (all registered prefixes)\n")
 	}
-	if len(prefixes) == 0 {
+	if len(res.prefixes) == 0 {
 		b.WriteString("# no IPv6 prefixes found\n")
 	} else {
-		fmt.Fprintf(b, "# count: %d\n", len(prefixes))
-		for _, p := range prefixes {
+		fmt.Fprintf(b, "# count: %d\n", len(res.prefixes))
+		for _, p := range res.prefixes {
 			b.WriteString(p.String())
 			b.WriteString("\n")
 		}
 	}
-	fmt.Fprintf(b, "# queried: %s\n", queriedAt.UTC().Format(time.RFC3339))
+	// A stale answer says so, on the line that already reports when the data
+	// was obtained — the client asked for current data and is getting
+	// something older, so that is where the caveat belongs.
+	annotation := ""
+	if res.stale {
+		expiredFor := nowFunc().Sub(res.queriedAt) - prefixCacheTTL
+		annotation = fmt.Sprintf(" (EXPIRED %s ago)", humanAge(expiredFor))
+	}
+	fmt.Fprintf(b, "# queried: %s%s\n", res.queriedAt.UTC().Format(time.RFC3339), annotation)
 }
 
 // writeUpstreamError renders a failed upstream lookup.

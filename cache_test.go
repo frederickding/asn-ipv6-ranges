@@ -41,7 +41,7 @@ func TestGetPrefixesCaching(t *testing.T) {
 		return sampleWhois, nil
 	})
 
-	_, t0, err := getPrefixes(context.Background(), "2906")
+	rest0, err := getPrefixes(context.Background(), "2906", true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -50,26 +50,26 @@ func TestGetPrefixesCaching(t *testing.T) {
 	}
 
 	clock = clock.Add(time.Minute)
-	_, t1, err := getPrefixes(context.Background(), "2906")
+	rest1, err := getPrefixes(context.Background(), "2906", true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if calls != 1 {
 		t.Errorf("cache hit should not query upstream, got %d calls", calls)
 	}
-	if !t1.Equal(t0) {
+	if t0, t1 := rest0.queriedAt, rest1.queriedAt; !t1.Equal(t0) {
 		t.Errorf("cached timestamp changed: %v -> %v", t0, t1)
 	}
 
 	clock = clock.Add(prefixCacheTTL)
-	_, t2, err := getPrefixes(context.Background(), "2906")
+	rest2, err := getPrefixes(context.Background(), "2906", true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if calls != 2 {
 		t.Errorf("expected refresh after TTL, got %d calls", calls)
 	}
-	if !t2.After(t0) {
+	if t0, t2 := rest0.queriedAt, rest2.queriedAt; !t2.After(t0) {
 		t.Errorf("refreshed timestamp should advance: %v -> %v", t0, t2)
 	}
 }
@@ -80,7 +80,7 @@ func TestCacheEvictsPastMaxAge(t *testing.T) {
 	clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 	swapTestHooks(t, &clock, func(string) (string, error) { return sampleWhois, nil })
 
-	if _, _, err := getPrefixes(context.Background(), "2906"); err != nil {
+	if _, err := getPrefixes(context.Background(), "2906", true); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !cacheHas("2906") {
@@ -89,7 +89,7 @@ func TestCacheEvictsPastMaxAge(t *testing.T) {
 
 	// Just short of the limit, the cold entry is still retained.
 	clock = clock.Add(prefixCacheMaxAge - time.Minute)
-	if _, _, err := getPrefixes(context.Background(), "24940"); err != nil {
+	if _, err := getPrefixes(context.Background(), "24940", true); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !cacheHas("2906") {
@@ -98,7 +98,7 @@ func TestCacheEvictsPastMaxAge(t *testing.T) {
 
 	// Past it, the next insert reaps it.
 	clock = clock.Add(2 * time.Minute)
-	if _, _, err := getPrefixes(context.Background(), "13335"); err != nil {
+	if _, err := getPrefixes(context.Background(), "13335", true); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if cacheHas("2906") {
@@ -119,7 +119,7 @@ func TestCacheRespectsMaxEntries(t *testing.T) {
 		// Advance the clock so recency is well defined, but stay inside
 		// prefixCacheMaxAge so this exercises capacity eviction rather than age.
 		clock = clock.Add(time.Second)
-		if _, _, err := getPrefixes(context.Background(), strconv.Itoa(1000+i)); err != nil {
+		if _, err := getPrefixes(context.Background(), strconv.Itoa(1000+i), true); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if n := cacheLen(); n > prefixCacheMaxEntries {
@@ -157,7 +157,7 @@ func TestCacheKeepsTheEntryJustWritten(t *testing.T) {
 	}
 	cacheMu.Unlock()
 
-	if _, _, err := getPrefixes(context.Background(), "2906"); err != nil {
+	if _, err := getPrefixes(context.Background(), "2906", true); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !cacheHas("2906") {
@@ -179,7 +179,7 @@ func TestSweepCachesReapsWhenIdle(t *testing.T) {
 	getenv = func(string) string { return "" }
 	orgRIRLookup = func(context.Context, asnreg.Registry, string) (string, error) { return "Netflix", nil }
 
-	if _, _, err := getPrefixes(context.Background(), "2906"); err != nil {
+	if _, err := getPrefixes(context.Background(), "2906", true); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if _, err := getOrgName(context.Background(), "2906", 2906, srcWHOIS); err != nil {
@@ -199,7 +199,7 @@ func TestSweepCachesReapsWhenIdle(t *testing.T) {
 	}
 
 	// A sweep with nothing to do must not remove live entries.
-	if _, _, err := getPrefixes(context.Background(), "2906"); err != nil {
+	if _, err := getPrefixes(context.Background(), "2906", true); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if n := sweepCaches(clock); n != 0 {
@@ -245,7 +245,7 @@ func TestGetPrefixesCachesErrorsBriefly(t *testing.T) {
 	})
 
 	for range 5 {
-		if _, _, err := getPrefixes(context.Background(), "2906"); err == nil {
+		if _, err := getPrefixes(context.Background(), "2906", true); err == nil {
 			t.Fatal("expected error")
 		}
 	}
@@ -255,7 +255,7 @@ func TestGetPrefixesCachesErrorsBriefly(t *testing.T) {
 
 	// Past failureTTL the ASN is retried...
 	clock = clock.Add(failureTTL + time.Second)
-	if _, _, err := getPrefixes(context.Background(), "2906"); err == nil {
+	if _, err := getPrefixes(context.Background(), "2906", true); err == nil {
 		t.Fatal("expected error")
 	}
 	if calls != 2 {
@@ -287,11 +287,11 @@ func TestGetPrefixesDoesNotCacheCancellations(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, _, err := getPrefixes(ctx, "2906"); err == nil {
+	if _, err := getPrefixes(ctx, "2906", true); err == nil {
 		t.Fatal("expected error")
 	}
 
-	if _, _, err := getPrefixes(context.Background(), "2906"); err != nil {
+	if _, err := getPrefixes(context.Background(), "2906", true); err != nil {
 		t.Fatalf("a cancelled lookup must not poison the cache: %v", err)
 	}
 	if calls != 2 {
@@ -311,7 +311,7 @@ func TestOrgCacheOutlivesPrefixCacheTTL(t *testing.T) {
 		return "Netflix", nil
 	}
 
-	if _, _, err := getPrefixes(context.Background(), "2906"); err != nil {
+	if _, err := getPrefixes(context.Background(), "2906", true); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if _, err := getOrgName(context.Background(), "2906", 2906, srcWHOIS); err != nil {
@@ -327,7 +327,7 @@ func TestOrgCacheOutlivesPrefixCacheTTL(t *testing.T) {
 		t.Fatalf("prefixCacheTTL %s must be shorter than orgCacheTTL %s for this test to mean anything", prefixCacheTTL, orgCacheTTL)
 	}
 
-	if entry, ok := lookupPrefixCache("2906"); ok {
+	if entry, ok := lookupPrefixEntry("2906"); ok && entry.servable(clock) {
 		t.Errorf("prefix entry is still considered fresh after prefixCacheTTL: %+v", entry)
 	}
 	if _, ok := lookupOrgCache(orgCacheKey{asn: "2906", src: srcWHOIS}); !ok {
@@ -355,13 +355,13 @@ func TestUpstreamBudgetRefusesQuery(t *testing.T) {
 	// One query, then nothing until the bucket refills a second later.
 	swapUpstreamBudget(t, budget{rate: 1, burst: 1, concurrency: 1})
 
-	if _, _, err := getPrefixes(context.Background(), "2906"); err != nil {
+	if _, err := getPrefixes(context.Background(), "2906", true); err != nil {
 		t.Fatalf("first query should be allowed: %v", err)
 	}
 
 	// Distinct ASNs, so neither the cache nor coalescing can absorb them.
 	for i := range 20 {
-		_, _, err := getPrefixes(context.Background(), strconv.Itoa(4000+i))
+		_, err := getPrefixes(context.Background(), strconv.Itoa(4000+i), true)
 		if !errors.Is(err, ratelimit.ErrLimited) {
 			t.Fatalf("query %d: got %v, want a budget refusal", i, err)
 		}
@@ -401,7 +401,7 @@ func TestGetPrefixesCoalescesConcurrentMisses(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _, errs[i] = getPrefixes(context.Background(), "2906")
+			_, errs[i] = getPrefixes(context.Background(), "2906", true)
 		}()
 	}
 
@@ -419,5 +419,225 @@ func TestGetPrefixesCoalescesConcurrentMisses(t *testing.T) {
 	defer mu.Unlock()
 	if calls != 1 {
 		t.Errorf("%d concurrent requests produced %d upstream queries, want 1", concurrent, calls)
+	}
+}
+
+// TestStalePrefixesServedWhenBudgetSpent is the headline case: RADB is the
+// narrowest upstream here, and once its budget is spent the expired-but-held
+// entry is a free answer. Refusing to use it would cost the client an answer
+// and invite the retry that costs RADB another query.
+func TestStalePrefixesServedWhenBudgetSpent(t *testing.T) {
+	clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	calls := 0
+	swapTestHooks(t, &clock, func(asn string) (string, error) {
+		if asn == "2906" {
+			calls++
+		}
+		return sampleWhois, nil
+	})
+
+	res, err := getPrefixes(context.Background(), "2906", true)
+	if err != nil {
+		t.Fatalf("warming the cache: %v", err)
+	}
+	warm := res.queriedAt
+	if res.stale {
+		t.Error("a freshly queried answer must not be reported stale")
+	}
+
+	// Past the TTL, well short of retention. The bucket never refills at rate
+	// 0, and New floors burst at 1, so spend that one token on another ASN to
+	// leave the budget genuinely exhausted.
+	clock = clock.Add(prefixCacheTTL + 18*time.Minute)
+	swapUpstreamBudget(t, budget{rate: 0, burst: 1, concurrency: 1})
+	if _, err := getPrefixes(context.Background(), "3999", true); err != nil {
+		t.Fatalf("spending the last token: %v", err)
+	}
+
+	res, err = getPrefixes(context.Background(), "2906", true)
+	if err != nil {
+		t.Fatalf("expected the stale entry, got error: %v", err)
+	}
+	if !res.stale {
+		t.Error("a past-TTL answer was not reported as stale")
+	}
+	if !res.queriedAt.Equal(warm) {
+		t.Errorf("queriedAt moved: %v -> %v; it must keep naming when the data was obtained", warm, res.queriedAt)
+	}
+	if len(res.prefixes) == 0 {
+		t.Error("stale answer carried no prefixes")
+	}
+	if calls != 1 {
+		t.Errorf("serving stale cost %d upstream queries, want 0 beyond the first", calls-1)
+	}
+}
+
+// TestStalePrefixesSurviveACachedFailure is the case that shaped cacheEntry: a
+// failure that gets cached used to overwrite the entry outright, destroying the
+// data the fallback needs. The entry has to hold both.
+func TestStalePrefixesSurviveACachedFailure(t *testing.T) {
+	clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	calls := 0
+	fail := false
+	swapTestHooks(t, &clock, func(string) (string, error) {
+		calls++
+		if fail {
+			return "", errors.New("dial tcp: connection refused")
+		}
+		return sampleWhois, nil
+	})
+
+	res, err := getPrefixes(context.Background(), "2906", true)
+	if err != nil {
+		t.Fatalf("warming the cache: %v", err)
+	}
+	warm := res.queriedAt
+
+	clock = clock.Add(prefixCacheTTL + time.Minute)
+	fail = true
+
+	res, err = getPrefixes(context.Background(), "2906", true)
+	if err != nil {
+		t.Fatalf("a transport failure with usable data cached must not error: %v", err)
+	}
+	if !res.stale || !res.queriedAt.Equal(warm) {
+		t.Errorf("got %+v, want the original data marked stale", res)
+	}
+	if calls != 2 {
+		t.Fatalf("got %d upstream calls, want 2", calls)
+	}
+
+	// Within failureTTL the failure is still remembered, so the next request
+	// serves the same stale data without asking RADB again.
+	res, err = getPrefixes(context.Background(), "2906", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.stale || calls != 2 {
+		t.Errorf("negative caching stopped working: stale=%v, %d upstream calls", res.stale, calls)
+	}
+}
+
+// TestStaleOptOutReturnsTheError: stale=0 gets the failure it asked for, and —
+// just as important — does not generate an extra upstream query to get it.
+func TestStaleOptOutReturnsTheError(t *testing.T) {
+	clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	calls := 0
+	fail := false
+	swapTestHooks(t, &clock, func(string) (string, error) {
+		calls++
+		if fail {
+			return "", errors.New("dial tcp: connection refused")
+		}
+		return sampleWhois, nil
+	})
+
+	if _, err := getPrefixes(context.Background(), "2906", true); err != nil {
+		t.Fatalf("warming the cache: %v", err)
+	}
+	clock = clock.Add(prefixCacheTTL + time.Minute)
+	fail = true
+
+	if _, err := getPrefixes(context.Background(), "2906", false); err == nil {
+		t.Fatal("stale=0 must surface the failure, not the expired entry")
+	}
+	if calls != 2 {
+		t.Fatalf("got %d upstream calls, want 2", calls)
+	}
+
+	// The cached failure path must honour it too, and still not re-query.
+	if _, err := getPrefixes(context.Background(), "2906", false); err == nil {
+		t.Error("stale=0 served an expired entry from the cached-failure path")
+	}
+	if calls != 2 {
+		t.Errorf("stale=0 cost an extra upstream query: %d calls", calls)
+	}
+
+	// The opt-out is per-request: it must not have changed what is stored.
+	if _, err := getPrefixes(context.Background(), "2906", true); err != nil {
+		t.Errorf("one client's stale=0 changed what another is served: %v", err)
+	}
+}
+
+// TestStalePrefixesRespectRetention: past prefixCacheMaxAge an entry is
+// promised to be gone. Retention is swept lazily, so it can still be sitting in
+// the map — serving it anyway would make the documented bound meaningless.
+func TestStalePrefixesRespectRetention(t *testing.T) {
+	clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	fail := false
+	swapTestHooks(t, &clock, func(string) (string, error) {
+		if fail {
+			return "", errors.New("dial tcp: connection refused")
+		}
+		return sampleWhois, nil
+	})
+
+	if _, err := getPrefixes(context.Background(), "2906", true); err != nil {
+		t.Fatalf("warming the cache: %v", err)
+	}
+	clock = clock.Add(prefixCacheMaxAge + time.Second)
+	fail = true
+
+	if !cacheHas("2906") {
+		t.Fatal("precondition: the entry should still be in the map, unswept")
+	}
+	if _, err := getPrefixes(context.Background(), "2906", true); err == nil {
+		t.Error("an entry past prefixCacheMaxAge was served as stale")
+	}
+}
+
+// TestFailureWithoutPriorDataStillErrors: the fallback only softens failures
+// for ASNs we have answered before. A first-ever query that fails has nothing
+// to fall back to and must say so.
+func TestFailureWithoutPriorDataStillErrors(t *testing.T) {
+	clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	swapTestHooks(t, &clock, func(string) (string, error) {
+		return "", errors.New("dial tcp: connection refused")
+	})
+
+	if _, err := getPrefixes(context.Background(), "2906", true); err == nil {
+		t.Error("a cold failure was somehow answered")
+	}
+}
+
+// TestFailureOnlyEntryIsNotSweptEarly: a failure with no prior data has no
+// queriedAt to age from. Aging it from the zero time would make it look older
+// than any retention bound, so the next insert would sweep it away and take
+// the negative caching with it — the ASN would be re-queried on every request.
+func TestFailureOnlyEntryIsNotSweptEarly(t *testing.T) {
+	clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	calls := 0
+	swapTestHooks(t, &clock, func(asn string) (string, error) {
+		calls++
+		if asn == "2906" {
+			return "", errors.New("dial tcp: connection refused")
+		}
+		return sampleWhois, nil
+	})
+
+	if _, err := getPrefixes(context.Background(), "2906", true); err == nil {
+		t.Fatal("expected an error")
+	}
+	// An unrelated insert prunes, and the reaper does too.
+	if _, err := getPrefixes(context.Background(), "24940", true); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	sweepCaches(clock)
+
+	if !cacheHas("2906") {
+		t.Fatal("the failure entry was swept before failureTTL elapsed")
+	}
+	if _, err := getPrefixes(context.Background(), "2906", true); err == nil {
+		t.Fatal("expected an error")
+	}
+	if calls != 2 {
+		t.Errorf("upstream saw %d queries, want 2: the failure must still suppress a re-query", calls)
+	}
+
+	// It still ages out on the ordinary schedule, measured from the failure.
+	clock = clock.Add(prefixCacheMaxAge + time.Second)
+	sweepCaches(clock)
+	if cacheHas("2906") {
+		t.Error("a failure entry outlived prefixCacheMaxAge")
 	}
 }

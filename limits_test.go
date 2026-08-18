@@ -271,7 +271,7 @@ func TestHandlerReportsSpentBudgetAs503(t *testing.T) {
 	swapUpstreamBudget(t, budget{rate: 1, burst: 1, concurrency: 1})
 
 	// Spend the budget on a different ASN so the cache cannot answer the next.
-	if _, _, err := getPrefixes(context.Background(), "2906"); err != nil {
+	if _, err := getPrefixes(context.Background(), "2906", true); err != nil {
 		t.Fatalf("priming query: %v", err)
 	}
 

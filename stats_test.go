@@ -68,7 +68,7 @@ func TestLogStatsReportsCacheSizes(t *testing.T) {
 
 	for i := range 5 {
 		clock = clock.Add(time.Second)
-		if _, _, err := getPrefixes(context.Background(), strconv.Itoa(3000+i)); err != nil {
+		if _, err := getPrefixes(context.Background(), strconv.Itoa(3000+i), true); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	}

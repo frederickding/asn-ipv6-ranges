@@ -861,3 +861,109 @@ func TestAggParamIgnoresRequestBody(t *testing.T) {
 		t.Error("body value overrode the default; agg must come from the URL query only")
 	}
 }
+
+// TestASHandlerServesStaleOnUpstreamFailure covers the default the whole
+// change exists for: RADB unreachable, an expired entry still held, and the
+// client gets an answer rather than a 502 — labelled so nobody mistakes it for
+// current data.
+func TestASHandlerServesStaleOnUpstreamFailure(t *testing.T) {
+	clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	fail := false
+	swapTestHooks(t, &clock, func(string) (string, error) {
+		if fail {
+			return "", errors.New("dial tcp: connection refused")
+		}
+		return sampleWhois, nil
+	})
+
+	// Warm the cache; a fresh answer carries no annotation.
+	rec := httptest.NewRecorder()
+	asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/2906", nil))
+	if !hasComment(rec.Body.String(), "# queried: 2026-08-16T12:00:00Z") {
+		t.Fatalf("warm response should be unannotated:\n%s", rec.Body.String())
+	}
+
+	clock = clock.Add(prefixCacheTTL + 18*time.Minute)
+	fail = true
+
+	rec = httptest.NewRecorder()
+	asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/2906", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200: a stale answer is still an answer", rec.Code)
+	}
+	// The exact wording is the client-visible contract.
+	want := "# queried: 2026-08-16T12:00:00Z (EXPIRED 18m ago)"
+	if !hasComment(rec.Body.String(), want) {
+		t.Errorf("got:\n%s\nwant a line %q", rec.Body.String(), want)
+	}
+	if !hasComment(rec.Body.String(), "# count: 2") {
+		t.Errorf("stale answer lost its prefixes:\n%s", rec.Body.String())
+	}
+}
+
+// TestASHandlerStaleOptOut: stale=0 asks for the error instead, and is a plain
+// boolean like every other parameter.
+func TestASHandlerStaleOptOut(t *testing.T) {
+	clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	fail := false
+	swapTestHooks(t, &clock, func(string) (string, error) {
+		if fail {
+			return "", errors.New("dial tcp: connection refused")
+		}
+		return sampleWhois, nil
+	})
+
+	rec := httptest.NewRecorder()
+	asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/2906", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("warming: got status %d", rec.Code)
+	}
+
+	clock = clock.Add(prefixCacheTTL + time.Minute)
+	fail = true
+
+	rec = httptest.NewRecorder()
+	asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/2906?stale=0", nil))
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("got status %d, want 502", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "EXPIRED") {
+		t.Errorf("stale=0 was served an expired entry:\n%s", rec.Body.String())
+	}
+
+	// The default is unaffected by another request having opted out.
+	rec = httptest.NewRecorder()
+	asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/2906", nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "EXPIRED") {
+		t.Errorf("default stopped serving stale after a stale=0 request: %d\n%s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/2906?stale=bogus", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("got status %d for an unparseable stale value, want 400", rec.Code)
+	}
+}
+
+func TestHumanAge(t *testing.T) {
+	cases := []struct {
+		in   time.Duration
+		want string
+	}{
+		{0, "0s"},
+		{-time.Second, "0s"}, // clock skew must not render "-1s"
+		{45 * time.Second, "45s"},
+		{time.Minute, "1m"},
+		{18*time.Minute + 30*time.Second, "18m"},
+		{time.Hour, "1h0m"},
+		{time.Hour + 3*time.Minute, "1h3m"},
+	}
+	for _, tc := range cases {
+		// time.Duration.String would render these as "18m0s"; the annotation
+		// is read by people, so it stays compact.
+		if got := humanAge(tc.in); got != tc.want {
+			t.Errorf("humanAge(%s) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}

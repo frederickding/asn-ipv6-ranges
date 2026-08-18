@@ -93,6 +93,86 @@ happening to make a request.
 
 ---
 
+## Serving stale entries
+
+Freshness and retention are deliberately far apart — 5 minutes against 1 hour
+for the prefix cache — so for roughly 55 minutes an entry is *present but not
+served*: too old to answer with, too young to delete. That window is free data,
+and when RADB cannot be reached it is the difference between an answer and an
+error.
+
+**By default, any prefix lookup failure falls back to it.** A spent RADB
+budget, a refused connection, a timeout, an oversized response — if the entry
+still holds prefixes, they are served with `200` instead of the `502`/`503`/
+`504` the failure would otherwise produce. The response says so on the line
+that already reports when the data was obtained:
+
+```
+# queried: 2026-08-16T12:00:00Z (EXPIRED 18m ago)
+```
+
+The duration is time since the TTL expired, not the age of the data — the
+timestamp already gives you that.
+
+This is the cheapest possible response: it costs RADB nothing. RADB is the
+narrowest upstream in the service (2 qps, concurrency 3, and the only source of
+prefixes), so the alternative is worse than it looks — an error denies the
+client an answer *and* invites the retry that costs another query.
+
+Two bounds still hold:
+
+- **Retention is enforced on the fallback.** An entry past `maxAge` is never
+  served, even though lazy sweeping means it may still be sitting in the map.
+  Serving it would make the documented bound meaningless.
+- **A cold failure is still a failure.** The fallback only softens failures for
+  ASNs already answered once; a first-ever query that fails has nothing to fall
+  back to.
+
+### How a failure keeps the data it replaces
+
+A cached failure used to overwrite the entry outright, which destroyed exactly
+the data the fallback needs. So `cacheEntry` carries both, with two timestamps:
+
+- `queriedAt` — when the prefixes were obtained. Drives the TTL, the retention
+  sweep, and the `# queried:` line.
+- `failedAt` — when the most recent attempt failed. Drives `failureTTL` alone.
+
+That separation is what lets one entry mean *"here are prefixes from 18 minutes
+ago, and the attempt to refresh them 5 seconds ago failed"*. Negative caching
+keeps working — the failure still suppresses re-queries for 30 seconds — while
+the data survives to answer them.
+
+The alternative, simply not writing the failure so the good entry survives,
+was rejected: it abandons negative caching for that ASN, so every request
+during an outage re-queries RADB until the budget is spent. That is the
+hammering this exists to prevent.
+
+### `stale=0`
+
+A client that must not be given expired data can opt out per request:
+
+```bash
+curl 'http://localhost:8080/as/2906?stale=0'
+```
+
+It restores the old behaviour exactly — the upstream failure is returned as
+`502`/`503`/`504`, with `Retry-After` on a spent budget. It generates no extra
+upstream traffic to do so: a request that opts out still respects the cached
+failure and simply reports it rather than re-querying.
+
+**This parameter is documented here and not in the [README](../README.md), on
+purpose.** The default is what protects RADB. A client that sets `stale=0` as a
+matter of course converts every upstream hiccup back into an error plus the
+retry that follows it — which is the load the default exists to avoid. It is
+here for the caller who genuinely cannot use data of unknown age, not as a
+general-purpose knob.
+
+It is read-only with respect to the cache: `stale=0` changes what one request
+is *shown*, never what is stored, so it cannot affect what another client is
+served.
+
+---
+
 ## Coalescing
 
 Concurrent first-time requests for the same key — an ASN for the prefix
@@ -127,6 +207,11 @@ shared by both caches) — without this, an ASN that cannot be resolved, or one
 chosen specifically because it fails, would be re-queried on every single
 request, turning inbound rate directly into upstream rate with the cache
 contributing nothing.
+
+For the prefix cache this suppresses the *query*, not the *answer*: a cached
+failure sitting on top of expired-but-retained prefixes still serves them, so
+the 30 seconds cost nobody an answer. See
+[Serving stale entries](#serving-stale-entries).
 
 Not every failure is cacheable, though — `cacheable(ctx, err)` excludes two
 kinds:

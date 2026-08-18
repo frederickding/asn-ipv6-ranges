@@ -200,29 +200,60 @@ func cacheable(ctx context.Context, err error) bool {
 	return !errors.Is(err, ratelimit.ErrLimited)
 }
 
-// cacheEntry holds either a result or the failure that replaced it. Failures
-// are cached too, for the shorter failureTTL — see getPrefixes.
+// cacheEntry holds an ASN's prefixes and, independently, whatever the most
+// recent attempt to refresh them failed with.
+//
+// The two are separate on purpose. A failure used to replace the entry
+// outright, which threw away the very data a client would rather have than an
+// error — and it had to, because one timestamp cannot say both when the
+// prefixes were obtained and when the last attempt failed. It now carries
+// both, so an entry can mean "here are prefixes from 18 minutes ago, and the
+// attempt to refresh them 5 seconds ago failed".
 type cacheEntry struct {
 	prefixes  []netip.Prefix
-	err       error
-	queriedAt time.Time
+	queriedAt time.Time // when prefixes were obtained; zero if never
+	err       error     // the most recent attempt's failure, if it failed
+	failedAt  time.Time // when that failure happened
 }
 
-// fresh reports whether an entry may still be served. Failures expire sooner
-// than results: they are cached to stop repeat upstream queries, not because
-// they are worth keeping.
-func (e cacheEntry) fresh(now time.Time) bool {
-	return isFresh(e.queriedAt, e.err, prefixCacheTTL, now)
+// servable reports whether the entry answers a request outright, with no
+// upstream query and nothing to disclose to the client.
+func (e cacheEntry) servable(now time.Time) bool {
+	return e.err == nil && now.Sub(e.queriedAt) < prefixCacheTTL
 }
 
-// isFresh reports whether an entry queried at at is still servable without a
-// re-query. A failed lookup uses the shared, much shorter failureTTL instead
-// of the cache's own ttl, regardless of which cache is asking.
-func isFresh(at time.Time, err error, ttl time.Duration, now time.Time) bool {
-	if err != nil {
-		ttl = failureTTL
+// retryBlocked reports that the last attempt failed recently enough that
+// trying again would just reproduce it. This is the negative caching that
+// keeps one unanswerable ASN from turning inbound rate into upstream rate;
+// it is measured from the failure, not from the data the entry may still
+// hold.
+func (e cacheEntry) retryBlocked(now time.Time) bool {
+	return e.err != nil && now.Sub(e.failedAt) < failureTTL
+}
+
+// lastTouched is the timestamp retention measures this entry from.
+//
+// Normally that is when the data was obtained: retention reclaims ASNs nobody
+// has successfully refreshed, and a failed refresh is not a refresh. An entry
+// that has never held data has no queriedAt to age from, so it ages from the
+// failure instead — without this it would look infinitely old and be swept on
+// the very next insert, taking the negative caching with it.
+func (e cacheEntry) lastTouched() time.Time {
+	if e.queriedAt.IsZero() {
+		return e.failedAt
 	}
-	return now.Sub(at) < ttl
+	return e.queriedAt
+}
+
+// usableStale reports whether the entry holds prefixes worth serving in place
+// of an error — past their TTL, but still within the retention bound.
+//
+// Enforcing maxAge here matters: retention is lazy (an insert or the once-a-
+// minute reaper), so entries linger in the map past it. Serving those would
+// make the documented bound mean nothing, and would hand a client data old
+// enough that the service has already promised to have forgotten it.
+func (e cacheEntry) usableStale(now time.Time) bool {
+	return !e.queriedAt.IsZero() && now.Sub(e.queriedAt) < prefixCacheMaxAge
 }
 
 // orgResult is an organization name plus the host that supplied it, so the
@@ -246,8 +277,16 @@ type orgCacheEntry struct {
 	fetchedAt time.Time
 }
 
+// fresh reports whether an org entry may still be served. Unlike the prefix
+// cache, a failure here simply replaces the entry: there is no stale fallback
+// to preserve, because an org lookup that fails does not sink the request —
+// the handler reports it on its own line and serves the prefixes anyway.
 func (e orgCacheEntry) fresh(now time.Time) bool {
-	return isFresh(e.fetchedAt, e.err, orgCacheTTL, now)
+	ttl := orgCacheTTL
+	if e.err != nil {
+		ttl = failureTTL
+	}
+	return now.Sub(e.fetchedAt) < ttl
 }
 
 var (
@@ -316,7 +355,7 @@ func sweepCaches(now time.Time) int {
 	// is always a canonicalized decimal string, never empty.
 	cacheMu.Lock()
 	before += len(cache)
-	pruneLocked(cache, "", func(e cacheEntry) time.Time { return e.queriedAt }, now, prefixCacheMaxAge, prefixCacheMaxEntries)
+	pruneLocked(cache, "", cacheEntry.lastTouched, now, prefixCacheMaxAge, prefixCacheMaxEntries)
 	after := len(cache)
 	cacheMu.Unlock()
 
@@ -347,12 +386,37 @@ func startCacheReaper(ctx context.Context) {
 	}()
 }
 
-// lookupPrefixCache returns a cached entry if one is still fresh.
-func lookupPrefixCache(asn string) (cacheEntry, bool) {
+// lookupPrefixEntry returns whatever is stored for asn, fresh or not. Callers
+// decide what the entry is good for; freshness is one of several questions
+// they may ask of it.
+func lookupPrefixEntry(asn string) (cacheEntry, bool) {
 	cacheMu.RLock()
 	entry, ok := cache[asn]
 	cacheMu.RUnlock()
-	return entry, ok && entry.fresh(nowFunc())
+	return entry, ok
+}
+
+// prefixResult is an ASN's prefixes plus what the caller needs to describe
+// them: when they were obtained, and whether they are being served past their
+// TTL because the upstream could not be reached.
+type prefixResult struct {
+	prefixes  []netip.Prefix
+	queriedAt time.Time
+	stale     bool
+}
+
+// staleOrErr is the single answer to "the lookup failed — now what?", used by
+// both the cached-failure and fresh-failure paths so the two cannot drift.
+//
+// Serving expired prefixes beats returning an error whenever the client has
+// not said otherwise: it costs no upstream traffic at all, which is precisely
+// what is scarce when RADB is refusing or unreachable, and an error would only
+// prompt a retry that costs more.
+func staleOrErr(entry cacheEntry, allowStale bool, now time.Time, err error) (prefixResult, error) {
+	if !allowStale || !entry.usableStale(now) {
+		return prefixResult{}, err
+	}
+	return prefixResult{prefixes: entry.prefixes, queriedAt: entry.queriedAt, stale: true}, nil
 }
 
 // getPrefixes returns an ASN's prefixes plus the time of the upstream query
@@ -364,16 +428,31 @@ func lookupPrefixCache(asn string) (cacheEntry, bool) {
 // spent. A failure is cached for failureTTL rather than not at all — the old
 // behaviour let one unanswerable ASN be replayed into unlimited upstream
 // traffic — but only when it came from RADB itself, per cacheable.
-func getPrefixes(ctx context.Context, asn string) ([]netip.Prefix, time.Time, error) {
-	if entry, ok := lookupPrefixCache(asn); ok {
-		return entry.prefixes, entry.queriedAt, entry.err
+//
+// A fourth thing bounds it now: when the query fails and the entry still holds
+// prefixes from before, they are served instead of the failure. allowStale
+// (the request's stale parameter) can turn that off, and is read-only — it
+// never changes what is written, so one client asking for strictly fresh data
+// cannot change what another client is served.
+func getPrefixes(ctx context.Context, asn string, allowStale bool) (prefixResult, error) {
+	now := nowFunc()
+	entry, ok := lookupPrefixEntry(asn)
+	switch {
+	case ok && entry.servable(now):
+		return prefixResult{prefixes: entry.prefixes, queriedAt: entry.queriedAt}, nil
+
+	// The last attempt failed recently. Querying again would reproduce it, so
+	// answer from what the entry still holds — the point of negative caching
+	// is to not ask, and that is exactly when stale data earns its keep.
+	case ok && entry.retryBlocked(now):
+		return staleOrErr(entry, allowStale, now, entry.err)
 	}
 
-	entry, err := prefixGroup.do(ctx, asn, func() (cacheEntry, error) {
+	fetched, err := prefixGroup.do(ctx, asn, func() (cacheEntry, error) {
 		// Re-checked inside the group: this call may have been queued behind
 		// one that has just stored an answer.
-		if entry, ok := lookupPrefixCache(asn); ok {
-			return entry, entry.err
+		if entry, ok := lookupPrefixEntry(asn); ok && entry.servable(nowFunc()) {
+			return entry, nil
 		}
 
 		output, err := withUpstreamBudget(radb.Host, func() (string, error) {
@@ -383,22 +462,38 @@ func getPrefixes(ctx context.Context, asn string) ([]netip.Prefix, time.Time, er
 			return cacheEntry{}, err
 		}
 
+		now := nowFunc()
 		// Cached un-aggregated, so both agg=1 and agg=0 share one upstream query.
-		entry := cacheEntry{queriedAt: nowFunc(), err: err}
+		entry := cacheEntry{queriedAt: now}
 		if err == nil {
 			entry.prefixes = extractIPv6Prefixes(output)
+		} else {
+			// Record the failure without discarding what we already had: the
+			// entry has to be able to block a re-query and still answer one.
+			// Only failedAt moves, so retention and the reported query time
+			// keep measuring the age of the data itself.
+			entry = cacheEntry{err: err, failedAt: now}
+			if prev, ok := lookupPrefixEntry(asn); ok && prev.usableStale(now) {
+				entry.prefixes, entry.queriedAt = prev.prefixes, prev.queriedAt
+			}
 		}
 
 		cacheMu.Lock()
 		cache[asn] = entry
-		pruneLocked(cache, asn, func(e cacheEntry) time.Time { return e.queriedAt }, entry.queriedAt, prefixCacheMaxAge, prefixCacheMaxEntries)
+		pruneLocked(cache, asn, cacheEntry.lastTouched, now, prefixCacheMaxAge, prefixCacheMaxEntries)
 		cacheMu.Unlock()
 		return entry, err
 	})
 	if err != nil {
-		return nil, time.Time{}, err
+		// fetched carries the merged entry when the failure was cacheable. A
+		// refusal that never reached RADB is not cached at all and yields the
+		// zero entry, so re-read what the cache still holds.
+		if !fetched.usableStale(now) {
+			fetched, _ = lookupPrefixEntry(asn)
+		}
+		return staleOrErr(fetched, allowStale, nowFunc(), err)
 	}
-	return entry.prefixes, entry.queriedAt, nil
+	return prefixResult{prefixes: fetched.prefixes, queriedAt: fetched.queriedAt}, nil
 }
 
 func lookupOrgCache(key orgCacheKey) (orgCacheEntry, bool) {
