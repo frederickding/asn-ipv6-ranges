@@ -170,7 +170,7 @@ forge a prefix entry.
 | `src` | Behavior |
 | --- | --- |
 | `auto` (default) | Cymru DNS, then PeeringDB, then the registry sources in the order above |
-| `cymru` | Team Cymru's DNS zone only |
+| `cymru` (or `dns`) | Team Cymru's DNS zone only |
 | `peeringdb` | PeeringDB only |
 | `whois` | RIR whois only |
 | `rdap` | RIR RDAP only |
@@ -197,7 +197,12 @@ the response says so rather than passing silently:
 # src: ignored (org lookup not requested)
 ```
 
-An unrecognized value returns `400` naming the valid ones.
+`dns` is an alias for `cymru` — Cymru's zone is the only source reached over
+DNS, and the protocol is the more memorable half of that name. The alias is
+resolved before the request is served, so the two spellings are the same
+request: identical output, and one shared cache entry rather than two.
+
+An unrecognized value returns `400` naming the valid ones, aliases included.
 
 #### Why the registry sources need per-registry rules
 

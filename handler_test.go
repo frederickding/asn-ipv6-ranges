@@ -268,6 +268,32 @@ func TestASHandlerOrgSources(t *testing.T) {
 		}
 	})
 
+	// src=dns is an alias, resolved before anything downstream sees it: the
+	// same source answers, and — because the org cache is keyed by src — the
+	// two spellings share one entry rather than doing the work twice.
+	t.Run("src=dns is an alias for src=cymru", func(t *testing.T) {
+		clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+		swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })
+		calls := 0
+		orgCymruLookup = func(context.Context, string, string) (string, error) {
+			calls++
+			return "From Cymru", nil
+		}
+
+		const want = "# org: From Cymru (source: " + cymrudns.Host + ")"
+		for _, src := range []string{"dns", "cymru"} {
+			rec := httptest.NewRecorder()
+			asHandler(rec, httptest.NewRequest(http.MethodGet, "/as/"+arinASN+"?org=1&src="+src, nil))
+
+			if !hasComment(rec.Body.String(), want) {
+				t.Errorf("src=%s got:\n%s", src, rec.Body.String())
+			}
+		}
+		if calls != 1 {
+			t.Errorf("Cymru queried %d times; the alias should share src=cymru's cache entry", calls)
+		}
+	})
+
 	t.Run("src=peeringdb forces PeeringDB", func(t *testing.T) {
 		clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 		swapTestHooks(t, &clock, func(string) (string, error) { return nestedWhois, nil })

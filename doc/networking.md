@@ -78,7 +78,7 @@ Every destination, for firewall and `NetworkPolicy` purposes:
 | Destination | Port | Protocol | When | Runtime? |
 | --- | --- | --- | --- | --- |
 | `whois.radb.net` | **43/tcp** | raw WHOIS | Every uncached `/as/{asn}` request | yes |
-| the resolver in `CYMRU_DNS_RESOLVER` (default `1.1.1.1`) | **53/udp** | DNS | `?org=1` with `src=auto` or `src=cymru` | yes |
+| the resolver in `CYMRU_DNS_RESOLVER` (default `1.1.1.1`) | **53/udp** | DNS | `?org=1` with `src=auto` or `src=cymru` (alias `src=dns`) | yes |
 | `www.peeringdb.com` | **443/tcp** | HTTPS | `?org=1` with `src=auto` or `src=peeringdb` | yes |
 | `whois.afrinic.net`, `whois.apnic.net`, `whois.arin.net`, `whois.lacnic.net`, `whois.ripe.net` | **43/tcp** | raw WHOIS | `?org=1` with `src=auto` or `src=whois` | yes |
 | `rdap.afrinic.net`, `rdap.apnic.net`, `rdap.arin.net`, `rdap.lacnic.net`, `rdap.db.ripe.net` | **443/tcp** | HTTPS (RDAP) | `?org=1` with `src=auto` or `src=rdap` | yes |

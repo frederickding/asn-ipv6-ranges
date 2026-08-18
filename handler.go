@@ -102,6 +102,7 @@ func asHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "%v", err)
 		return
 	}
+	orgSrc = canonicalOrgSource(orgSrc)
 
 	// One deadline for every upstream call this request makes, cancelled with
 	// the request itself: a client that disconnects must not leave queries

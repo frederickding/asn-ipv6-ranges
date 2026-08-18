@@ -63,10 +63,33 @@ const (
 	srcPeeringDB = "peeringdb"
 	srcWHOIS     = "whois"
 	srcRDAP      = "rdap"
+
+	// srcDNS selects the same source as srcCymru. Team Cymru's zone is the
+	// only one of these reached over DNS, and "dns" is what someone naming
+	// the protocol rather than the operator will reach for.
+	srcDNS = "dns"
 )
 
-// orgSources lists the valid src values, for validation and error messages.
-var orgSources = []string{srcAuto, srcCymru, srcPeeringDB, srcWHOIS, srcRDAP}
+// orgSources lists the accepted src values, for validation and error
+// messages. Aliases are listed too, so a 400 names every spelling that works.
+var orgSources = []string{srcAuto, srcCymru, srcDNS, srcPeeringDB, srcWHOIS, srcRDAP}
+
+// orgSourceAliases maps each accepted alias to the source it selects.
+var orgSourceAliases = map[string]string{srcDNS: srcCymru}
+
+// canonicalOrgSource resolves an alias to the source it names, leaving every
+// other value alone.
+//
+// Callers resolve this at parse time so nothing downstream — the dispatch in
+// resolveOrgName, the org cache key, the source annotation in the response —
+// ever sees an alias. Skipping it would give ?src=dns and ?src=cymru separate
+// cache entries for identical work.
+func canonicalOrgSource(src string) string {
+	if canonical, ok := orgSourceAliases[src]; ok {
+		return canonical
+	}
+	return src
+}
 
 // Seams overridden in tests to avoid real network calls and real waiting.
 var (
