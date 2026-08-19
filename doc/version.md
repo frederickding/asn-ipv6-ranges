@@ -49,14 +49,19 @@ The image `ENTRYPOINT` is the binary, so this interrogates an image without
 starting a server:
 
 ```bash
-docker run --rm ghcr.io/<owner>/asn-ipv6-ranges:v1.1.0 -version
+docker run --rm ghcr.io/frederickding/asn-ipv6-ranges:v1.1 -version
 ```
 
 ```
-v1.1.0
+v1.1.2
 ```
 
 Prints `version` alone, to stdout, and exits 0. `--version` works identically.
+
+Note the two differ, and that is the point: `:v1.1` is a moving tag that each
+patch release advances, so asking the binary is how you learn which patch it
+actually is. Manifests pin the minor tag precisely so they need no edit per
+release — see the deployment manifests under `deploy/kubernetes/`.
 
 > Introducing flag parsing means unrecognized arguments are now **rejected**
 > rather than ignored. `docker run <image> --whatever` exits non-zero where it
