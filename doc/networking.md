@@ -112,7 +112,7 @@ RADB is the narrowest upstream here and the only source of prefixes, so a
 failure degrades before it errors: when the budget is spent or RADB is
 unreachable, an expired-but-retained cache entry is served with `200` in
 preference to a `503`, since that costs RADB nothing and an error would only
-invite a retry. See [caching.md](caching.md#serving-stale-entries).
+invite a retry. See [caching.md](caching.md#expired-answers-during-an-outage).
 
 ### Team Cymru DNS zone — organization names
 
