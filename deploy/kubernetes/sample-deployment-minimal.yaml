@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: asn-ipv6-ranges
-          image: ghcr.io/frederickding/asn-ipv6-ranges:v1.1
+          image: ghcr.io/frederickding/asn-ipv6-ranges:v1.2
           env:
             - name: PORT
               value: "80"

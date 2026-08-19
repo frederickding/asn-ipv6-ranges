@@ -3,7 +3,7 @@
 What changed for anyone using the service, per release. Technical detail lives
 in the commit history and `doc/`.
 
-## Unreleased
+## v1.2.0 — 2026-08-19
 
 - **Organization lookups no longer need a paid API key.** The WhoisFreaks API
   is replaced by Team Cymru's DNS zone and PeeringDB, both free and neither

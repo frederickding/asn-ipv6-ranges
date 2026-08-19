@@ -61,7 +61,7 @@ spec:
           #   kubectl exec deploy/asn-ipv6-ranges -- /asn-ipv6-ranges -version
           # or `curl <pod>:8080/-/version` confirms the running build matches
           # the tag pinned here. See doc/version.md.
-          image: ghcr.io/frederickding/asn-ipv6-ranges:v1.1
+          image: ghcr.io/frederickding/asn-ipv6-ranges:v1.2
           imagePullPolicy: IfNotPresent
           env:
             - name: PORT
